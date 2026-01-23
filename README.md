@@ -53,8 +53,7 @@ cmake --build build -j
   predict --kind current \
   --begin "2026-01-22 00:00" \
   --end   "2026-01-23 00:00" \
-  --step  "00:10" \
-  --format c --mode r
+  --step  "00:10" 
 ```
 
 ### Tide only 
@@ -66,7 +65,6 @@ cmake --build build -j
   predict --kind tide \
   --begin "2026-01-22 00:00" \
   --end   "2026-01-23 00:00" \
-  --step  "00:10" \
-  --format c --mode r
+  --step  "00:10" 
 ```
 
