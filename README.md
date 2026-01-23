@@ -44,19 +44,6 @@ cmake --build build -j
   nearest --no-tide --top 1
 ```
 
-### Both tide + current
-
-```bash
-./xtide-nearest \
-  --lat 40.7000 --lon -74.0120 \
-  --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd" \
-  predict --kind both \
-  --begin "2026-01-22 00:00" \
-  --end   "2026-01-23 00:00" \
-  --step  "00:10" \
-  --format c --mode r
-```
-
 ### Currents only
 
 ```bash
@@ -82,25 +69,4 @@ cmake --build build -j
   --step  "00:10" \
   --format c --mode r
 ```
-
-## Output
-
-Tide output columns:
-
-* `epoch_s` (UTC)
-* `iso_utc`
-* `height`
-
-Current output columns:
-
-* `epoch_s` (UTC)
-* `iso_utc`
-* `speed_kt_signed` (flood positive, ebb negative)
-* `speed_kt` (absolute speed)
-* `dir_deg_true` (from `tide` if present; else derived from sign + nominal flood/ebb directions)
-* `east_kt`, `north_kt` (vector components)
-
-Metadata is printed as `# key=value` comment lines above the CSV header.
-Distances and chosen station names are printed to stderr.
-
 
