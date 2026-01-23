@@ -329,16 +329,16 @@ jobs:
           ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
             nearest --no-tide --top 1
 
-          # Now test predictions by invoking tide.exe directly (avoid cmd/system() quoting issues inside xtide-nearest).
+          # Predictions smoke test: invoke tide.exe directly (avoids cmd/system() quoting issues in xtide-nearest on Windows).
           echo ""
-          echo "=== tide.exe version ==="
-          "${{ env.TIDE_EXE }}" --version || true
+          echo "=== tide.exe help (sanity) ==="
+          "${{ env.TIDE_EXE }}" -help 2>/dev/null | head -n 20 || true
 
           # Ensure tide.exe can find the harmonics database.
           export HFILE_PATH="$(dirname "${{ env.HARM_TCD }}")"
           echo "HFILE_PATH=$HFILE_PATH"
 
-          # Use a known current station name (matches your earlier log)
+          # Known current station name (from earlier logs)
           STATION='Dimond Reef (depth 11 ft), Upper Bay, New York Harbor, New York Current'
 
           echo ""
@@ -352,7 +352,7 @@ jobs:
           echo "--- out.csv (head) ---"
           sed -n '1,12p' out.csv
 
-          # Hard assertion: CSV should have at least a header + a few rows.
+          # Hard assertion: must produce rows
           test "$(wc -l < out.csv)" -ge 5
 
       - name: Package zip (includes tide.exe)
