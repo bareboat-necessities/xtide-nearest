@@ -1,518 +1,418 @@
-#include <CLI/CLI.hpp>
-
-#include <tcd.h>  // libtcd (XTide)
-
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <utility>
 #include <vector>
 
-#if defined(_WIN32)
-  #include <process.h>
-  #define popen  _popen
-  #define pclose _pclose
-#endif
+#include <CLI/CLI.hpp>
+
+extern "C" {
+#include <tcd.h>
+}
 
 namespace fs = std::filesystem;
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kEarthRadiusM = 6371000.0;
+constexpr double kEarthRadiusKm = 6371.0088;
 
-enum class Product { Tide, Current, Both };
+double deg2rad(double d) { return d * (M_PI / 180.0); }
+
+double haversine_km(double lat1, double lon1, double lat2, double lon2) {
+  const double p1 = deg2rad(lat1);
+  const double p2 = deg2rad(lat2);
+  const double dp = deg2rad(lat2 - lat1);
+  const double dl = deg2rad(lon2 - lon1);
+
+  const double a = std::sin(dp / 2) * std::sin(dp / 2) +
+                   std::cos(p1) * std::cos(p2) *
+                       (std::sin(dl / 2) * std::sin(dl / 2));
+  const double c = 2.0 * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
+  return kEarthRadiusKm * c;
+}
+
+std::string trim_copy(std::string s) {
+  auto is_ws = [](unsigned char c) { return std::isspace(c) != 0; };
+  s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&](char c) { return !is_ws((unsigned char)c); }));
+  s.erase(std::find_if(s.rbegin(), s.rend(), [&](char c) { return !is_ws((unsigned char)c); }).base(), s.end());
+  return s;
+}
+
+std::string to_lower_copy(std::string s) {
+  for (auto &c : s) c = (char)std::tolower((unsigned char)c);
+  return s;
+}
+
+bool contains_icase(std::string_view hay, std::string_view needle) {
+  std::string H(hay);
+  std::string N(needle);
+  H = to_lower_copy(H);
+  N = to_lower_copy(N);
+  return H.find(N) != std::string::npos;
+}
+
+enum class Kind { Tide, Current };
+
+std::string kind_str(Kind k) { return (k == Kind::Current) ? "current" : "tide"; }
 
 struct Station {
   std::string name;
-  double lat_deg = 0.0;
-  double lon_deg = 0.0;
-  bool is_current = false;
+  double lat_deg{};
+  double lon_deg{};
+  Kind kind{};
+  std::string units;      // e.g. "meters", "feet", "knots"
+  int min_dir_deg{361};   // 0..360 or 361 = none
+  int max_dir_deg{361};   // 0..360 or 361 = none
+  fs::path tcd_path;      // which harmonics file it came from
+};
 
-  // For current stations, nominal directions (degrees true).
-  // libtcd uses 361 as "null" for direction fields in the TCD schema.
-  int ebb_dir_deg = 361;    // usually min_direction
-  int flood_dir_deg = 361;  // usually max_direction
+struct Candidate {
+  Station st;
+  double distance_km{};
 };
 
 struct TideDbGuard {
-  explicit TideDbGuard(const std::string& path) {
-    // open_tide_db returns non-zero on error in common libtcd builds.
-    if (open_tide_db(const_cast<char*>(path.c_str())) != 0) {
-      throw std::runtime_error("open_tide_db failed for: " + path);
+  TideDbGuard(const fs::path &p) : path(p) {
+    // libtcd API wants NV_CHAR* (mutable char*). Safe for read-only use.
+    const std::string s = path.string();
+    buf = s; // keep storage stable
+    if (!open_tide_db(buf.data())) {
+      throw std::runtime_error("open_tide_db failed for: " + path.string());
     }
   }
-  ~TideDbGuard() {
-    close_tide_db();
-  }
-  TideDbGuard(const TideDbGuard&) = delete;
-  TideDbGuard& operator=(const TideDbGuard&) = delete;
+  ~TideDbGuard() { close_tide_db(); }
+
+  fs::path path;
+  std::string buf;
 };
 
-static inline double deg2rad(double d) { return d * kPi / 180.0; }
-
-double haversine_m(double lat1_deg, double lon1_deg, double lat2_deg, double lon2_deg) {
-  const double lat1 = deg2rad(lat1_deg);
-  const double lon1 = deg2rad(lon1_deg);
-  const double lat2 = deg2rad(lat2_deg);
-  const double lon2 = deg2rad(lon2_deg);
-
-  const double dlat = lat2 - lat1;
-  const double dlon = lon2 - lon1;
-
-  const double a = std::pow(std::sin(dlat / 2.0), 2) +
-                   std::cos(lat1) * std::cos(lat2) * std::pow(std::sin(dlon / 2.0), 2);
-  const double c = 2.0 * std::atan2(std::sqrt(a), std::sqrt(std::max(0.0, 1.0 - a)));
-  return kEarthRadiusM * c;
+bool is_current_units(const std::string &units) {
+  // Common current units: knots, kt, kts, m/s
+  if (contains_icase(units, "knot")) return true;
+  if (contains_icase(units, "kt")) return true;
+  if (contains_icase(units, "m/s")) return true;
+  return false;
 }
 
-std::string trim_cstr(const char* s) {
-  if (!s) return {};
-  std::string out(s);
-  while (!out.empty() && (out.back() == '\0' || out.back() == ' ' || out.back() == '\n' || out.back() == '\r' || out.back() == '\t'))
-    out.pop_back();
-  size_t i = 0;
-  while (i < out.size() && (out[i] == ' ' || out[i] == '\n' || out[i] == '\r' || out[i] == '\t'))
-    ++i;
-  return out.substr(i);
+std::optional<std::string> getenv_str(const char *name) {
+  if (const char *v = std::getenv(name)) return std::string(v);
+  return std::nullopt;
 }
 
-// Very small CSV splitter for XTide raw CSV (no quotes expected)
-std::vector<std::string_view> split_csv(std::string_view line) {
-  std::vector<std::string_view> cols;
-  size_t start = 0;
-  while (start <= line.size()) {
-    size_t comma = line.find(',', start);
-    if (comma == std::string_view::npos) {
-      cols.emplace_back(line.substr(start));
-      break;
-    }
-    cols.emplace_back(line.substr(start, comma - start));
-    start = comma + 1;
-  }
-  // trim spaces around columns
-  for (auto& c : cols) {
-    while (!c.empty() && (c.front() == ' ' || c.front() == '\t')) c.remove_prefix(1);
-    while (!c.empty() && (c.back() == ' '  || c.back() == '\t' || c.back() == '\r')) c.remove_suffix(1);
-  }
-  return cols;
-}
-
-template <class T>
-bool from_chars_any(std::string_view sv, T& out) {
-  // for integers: from_chars
-  if constexpr (std::is_integral_v<T>) {
-    const char* b = sv.data();
-    const char* e = sv.data() + sv.size();
-    auto [p, ec] = std::from_chars(b, e, out);
-    return ec == std::errc{} && p == e;
-  } else {
-    // floating: strtod
-    std::string tmp(sv);
-    char* end = nullptr;
-    out = static_cast<T>(std::strtod(tmp.c_str(), &end));
-    return end && *end == '\0';
-  }
-}
-
-std::string iso_utc_from_epoch(long long epoch_s) {
-  std::time_t t = static_cast<std::time_t>(epoch_s);
-  std::tm tm{};
-#if defined(_WIN32)
-  gmtime_s(&tm, &t);
+void setenv_portable(const std::string &key, const std::string &val) {
+#ifdef _WIN32
+  _putenv_s(key.c_str(), val.c_str());
 #else
-  gmtime_r(&t, &tm);
+  ::setenv(key.c_str(), val.c_str(), 1);
 #endif
-  std::ostringstream oss;
-  oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
-  return oss.str();
 }
 
-// Best-effort quoting for shell command arguments
-std::string shell_quote(std::string_view s) {
-#if defined(_WIN32)
-  // Windows cmd quoting is messy; simplest: wrap in double-quotes and escape internal quotes.
+void unsetenv_portable(const std::string &key) {
+#ifdef _WIN32
+  _putenv_s(key.c_str(), "");
+#else
+  ::unsetenv(key.c_str());
+#endif
+}
+
+#ifdef _WIN32
+FILE *popen_portable(const char *cmd, const char *mode) { return _popen(cmd, mode); }
+int pclose_portable(FILE *f) { return _pclose(f); }
+#else
+FILE *popen_portable(const char *cmd, const char *mode) { return popen(cmd, mode); }
+int pclose_portable(FILE *f) { return pclose(f); }
+#endif
+
+std::string shell_quote_double(std::string s) {
+  // Minimal safe quoting for our usage:
+  // wrap in "..." and escape backslash and double quotes.
   std::string out;
+  out.reserve(s.size() + 2);
   out.push_back('"');
   for (char c : s) {
-    if (c == '"') out += "\\\"";
-    else out.push_back(c);
+    if (c == '\\' || c == '"') out.push_back('\\');
+    out.push_back(c);
   }
   out.push_back('"');
   return out;
-#else
-  // POSIX: single-quote, escape embedded single-quotes
-  std::string out;
-  out.push_back('\'');
-  for (char c : s) {
-    if (c == '\'') out += "'\\''";
-    else out.push_back(c);
-  }
-  out.push_back('\'');
-  return out;
-#endif
 }
 
-void set_env(const std::string& key, const std::string& value) {
-#if defined(_WIN32)
-  _putenv_s(key.c_str(), value.c_str());
-#else
-  setenv(key.c_str(), value.c_str(), 1);
-#endif
-}
+std::vector<Station> load_stations_from_one_tcd(const fs::path &tcd_path) {
+  TideDbGuard db(tcd_path);
 
-struct Pipe {
-  FILE* f = nullptr;
-  explicit Pipe(const std::string& cmd) {
-    f = popen(cmd.c_str(), "r");
-    if (!f) throw std::runtime_error("popen failed for command: " + cmd);
-  }
-  ~Pipe() {
-    if (f) pclose(f);
-  }
-  Pipe(const Pipe&) = delete;
-  Pipe& operator=(const Pipe&) = delete;
-};
-
-std::vector<Station> load_stations_from_one_tcd(const fs::path& tcd_path) {
-  TideDbGuard db(tcd_path.string());
-
-  DB_HEADER header{};
-  if (get_tide_db_header(&header) != 0) {
-    throw std::runtime_error("get_tide_db_header failed for: " + tcd_path.string());
-  }
+  const DB_HEADER_PUBLIC header = get_tide_db_header();
 
   std::vector<Station> stations;
-  stations.reserve(static_cast<size_t>(header.number_of_records));
+  stations.reserve((size_t)std::max<NV_INT32>(0, header.number_of_records));
 
-  for (int i = 0; i < header.number_of_records; ++i) {
+  for (NV_INT32 i = 0; i < header.number_of_records; ++i) {
     TIDE_RECORD rec{};
-    if (get_tide_record(i, &rec) != 0) {
-      continue;
-    }
+    const NV_INT32 got = read_tide_record(i, &rec);
+    if (got < 0) continue;
 
-    Station s;
-    s.name = trim_cstr(rec.header.name);
-    s.lat_deg = rec.header.latitude;
-    s.lon_deg = rec.header.longitude;
+    std::string name = rec.header.name ? std::string(rec.header.name) : std::string{};
+    name = trim_copy(name);
+    if (name.empty()) continue;
 
-    // Unit string comes from header's level_units table.
-    // For type-1 records, rec.units is used; for type-2 records, rec.level_units is used.
-    // (These are indices into the "level units" array in the database header.)
-    int unit_index = 0;
-    if (rec.header.record_type == 1) unit_index = rec.units;
-    else unit_index = rec.level_units;
+    // Units: use level_units index. (Older docs mention rec.units; modern headers may not have it.)
+    std::string units;
+    if (const char *u = get_level_units(rec.level_units)) units = u;
 
-    std::string unit_str = trim_cstr(header.level_units[unit_index]);
-    // Current stations use "kt" in XTide databases.
-    s.is_current = (unit_str == "kt" || unit_str.find("kt") != std::string::npos);
+    const bool is_current = is_current_units(units);
+    Station st;
+    st.name = std::move(name);
+    st.lat_deg = rec.header.latitude;
+    st.lon_deg = rec.header.longitude;
+    st.kind = is_current ? Kind::Current : Kind::Tide;
+    st.units = std::move(units);
+    st.min_dir_deg = (int)rec.min_direction;
+    st.max_dir_deg = (int)rec.max_direction;
+    st.tcd_path = tcd_path;
 
-    if (s.is_current) {
-      // Nominal current directions (degrees true) are stored in min_direction/max_direction.
-      // Using XTide/NOS convention: min ~= ebb, max ~= flood.
-      // 361 indicates "null" for direction fields.
-      s.ebb_dir_deg = rec.min_direction;
-      s.flood_dir_deg = rec.max_direction;
-    }
-
-    if (!s.name.empty()) stations.push_back(std::move(s));
+    stations.push_back(std::move(st));
   }
 
   return stations;
 }
 
-std::vector<Station> load_stations(const std::vector<fs::path>& tcd_files) {
-  // Merge by name (first wins).
-  std::unordered_map<std::string, Station> uniq;
-
-  for (const auto& p : tcd_files) {
+std::vector<Station> load_stations(const std::vector<fs::path> &tcd_files) {
+  std::vector<Station> all;
+  for (const auto &p : tcd_files) {
     auto v = load_stations_from_one_tcd(p);
-    for (auto& s : v) {
-      if (!uniq.contains(s.name)) uniq.emplace(s.name, std::move(s));
-    }
+    all.insert(all.end(), std::make_move_iterator(v.begin()), std::make_move_iterator(v.end()));
+  }
+  return all;
+}
+
+std::vector<Candidate> nearest(const std::vector<Station> &stations,
+                               double lat, double lon,
+                               std::optional<Kind> kind_filter,
+                               size_t top_n) {
+  std::vector<Candidate> out;
+  out.reserve(stations.size());
+
+  for (const auto &st : stations) {
+    if (kind_filter && st.kind != *kind_filter) continue;
+    Candidate c;
+    c.st = st;
+    c.distance_km = haversine_km(lat, lon, st.lat_deg, st.lon_deg);
+    out.push_back(std::move(c));
   }
 
-  std::vector<Station> out;
-  out.reserve(uniq.size());
-  for (auto& kv : uniq) out.push_back(std::move(kv.second));
+  std::sort(out.begin(), out.end(), [](const Candidate &a, const Candidate &b) {
+    return a.distance_km < b.distance_km;
+  });
+
+  if (out.size() > top_n) out.resize(top_n);
   return out;
 }
 
-std::optional<std::pair<Station, double>> nearest_station(
-  const std::vector<Station>& stations, double lat, double lon, bool want_current
-) {
-  double best = std::numeric_limits<double>::infinity();
-  const Station* best_s = nullptr;
-
-  for (const auto& s : stations) {
-    if (s.is_current != want_current) continue;
-    double d = haversine_m(lat, lon, s.lat_deg, s.lon_deg);
-    if (d < best) {
-      best = d;
-      best_s = &s;
-    }
+std::string join_hfile_path(const std::vector<fs::path> &tcd_files) {
+#ifdef _WIN32
+  const char sep = ';';
+#else
+  const char sep = ':';
+#endif
+  std::ostringstream oss;
+  for (size_t i = 0; i < tcd_files.size(); ++i) {
+    if (i) oss << sep;
+    oss << tcd_files[i].string();
   }
-  if (!best_s) return std::nullopt;
-  return std::make_pair(*best_s, best);
+  return oss.str();
 }
 
-struct PredictArgs {
-  std::string station_name;
-  std::string start;   // "YYYY-MM-DD HH:MM"
-  std::string end;     // "YYYY-MM-DD HH:MM"
-  std::string step;    // "HH:MM"
-  bool utc = true;
-  bool no_units_suffix = true;
-  std::optional<std::string> preferred_tide_units; // "ft" or "m"
-};
+int run_tide_and_stream(const std::string &tide_bin,
+                        const std::vector<fs::path> &tcd_files,
+                        const std::string &station_name,
+                        const std::string &begin,
+                        const std::string &end,
+                        const std::string &step_hhmm,
+                        bool utc,
+                        bool suppress_sunmoon,
+                        bool omit_units,
+                        bool emit_metadata,
+                        double dist_km,
+                        Kind kind) {
+  // Set HFILE_PATH for XTide/tide.
+  const auto old_hfile = getenv_str("HFILE_PATH");
+  setenv_portable("HFILE_PATH", join_hfile_path(tcd_files));
 
-std::string build_tide_command(const PredictArgs& a) {
-  // tide options (see man page):
-  // -l location, -b begin, -e end, -s step, -f c CSV, -m r raw, -ou y strip unit suffixes, -z y force UTC :contentReference[oaicite:5]{index=5}
   std::ostringstream cmd;
-  cmd << "tide"
-      << " -f c"
-      << " -m r"
-      << " -l " << shell_quote(a.station_name)
-      << " -b " << shell_quote(a.start)
-      << " -e " << shell_quote(a.end)
-      << " -s " << shell_quote(a.step);
+  cmd << shell_quote_double(tide_bin);
+  cmd << " -l " << shell_quote_double(station_name);
+  cmd << " -b " << shell_quote_double(begin);
+  cmd << " -e " << shell_quote_double(end);
 
-  if (a.no_units_suffix) cmd << " -ou y";
-  if (a.utc) cmd << " -z y";
+  // raw mode + CSV is stable for plotting
+  cmd << " -m r -f c";
+  cmd << " -s " << shell_quote_double(step_hhmm);
 
-  if (a.preferred_tide_units.has_value()) {
-    cmd << " -u " << *a.preferred_tide_units;
-  }
-  return cmd.str();
-}
+  cmd << " -z " << (utc ? "y" : "n");
+  if (suppress_sunmoon) cmd << " -em pSsMm";
+  if (omit_units) cmd << " -ou y";
 
-void emit_tide_series(
-  const Station& st,
-  const PredictArgs& args,
-  bool print_header
-) {
-  const std::string cmd = build_tide_command(args);
-  Pipe pipe(cmd);
+  const std::string cmd_str = cmd.str();
 
-  if (print_header) {
-    std::cout << "# product=tide\n";
-    std::cout << "# station=" << st.name << "\n";
-    std::cout << "# station_lat_deg=" << st.lat_deg << "\n";
-    std::cout << "# station_lon_deg=" << st.lon_deg << "\n";
-    std::cout << "epoch_s,iso_utc,height\n";
+  FILE *pipe = popen_portable(cmd_str.c_str(), "r");
+  if (!pipe) {
+    if (old_hfile) setenv_portable("HFILE_PATH", *old_hfile);
+    else unsetenv_portable("HFILE_PATH");
+    std::cerr << "ERROR: failed to run tide command\n";
+    std::cerr << "CMD: " << cmd_str << "\n";
+    return 2;
   }
 
-  std::array<char, 8192> buf{};
-  while (std::fgets(buf.data(), static_cast<int>(buf.size()), pipe.f)) {
-    std::string line(buf.data());
-    if (line.empty()) continue;
-    if (line[0] == '#') continue;
-
-    auto cols = split_csv(line);
-    if (cols.size() < 2) continue;
-
-    long long epoch = 0;
-    double h = 0.0;
-    if (!from_chars_any(cols[0], epoch)) continue; // skip non-data header lines
-    if (!from_chars_any(cols[1], h)) continue;
-
-    std::cout << epoch << "," << iso_utc_from_epoch(epoch) << "," << h << "\n";
-  }
-}
-
-void emit_current_series(
-  const Station& st,
-  const PredictArgs& args,
-  bool print_header
-) {
-  const std::string cmd = build_tide_command(args);
-  Pipe pipe(cmd);
-
-  const bool have_nominal_dirs = (st.ebb_dir_deg >= 0 && st.ebb_dir_deg <= 360 &&
-                                  st.flood_dir_deg >= 0 && st.flood_dir_deg <= 360);
-
-  if (print_header) {
-    std::cout << "# product=current\n";
-    std::cout << "# station=" << st.name << "\n";
-    std::cout << "# station_lat_deg=" << st.lat_deg << "\n";
-    std::cout << "# station_lon_deg=" << st.lon_deg << "\n";
-    if (have_nominal_dirs) {
-      std::cout << "# station_flood_dir_deg_true=" << st.flood_dir_deg << "\n";
-      std::cout << "# station_ebb_dir_deg_true=" << st.ebb_dir_deg << "\n";
-    }
-    std::cout << "epoch_s,iso_utc,speed_kt_signed,speed_kt,dir_deg_true,east_kt,north_kt\n";
+  if (emit_metadata) {
+    std::cout << "# kind=" << kind_str(kind)
+              << " station=" << station_name
+              << " distance_km=" << std::fixed << std::setprecision(3) << dist_km
+              << " begin=" << begin
+              << " end=" << end
+              << " step=" << step_hhmm
+              << " utc=" << (utc ? "true" : "false")
+              << "\n";
   }
 
   std::array<char, 8192> buf{};
-  while (std::fgets(buf.data(), static_cast<int>(buf.size()), pipe.f)) {
-    std::string line(buf.data());
-    if (line.empty()) continue;
-    if (line[0] == '#') continue;
-
-    auto cols = split_csv(line);
-    if (cols.size() < 2) continue;
-
-    long long epoch = 0;
-    double signed_speed = 0.0;
-    if (!from_chars_any(cols[0], epoch)) continue;
-    if (!from_chars_any(cols[1], signed_speed)) continue;
-
-    double dir_deg = std::numeric_limits<double>::quiet_NaN();
-
-    // If tide emits a direction column, use it (best case).
-    if (cols.size() >= 3) {
-      double d = 0.0;
-      if (from_chars_any(cols[2], d)) dir_deg = d;
-    }
-
-    // Otherwise derive from sign and nominal flood/ebb directions.
-    if (!std::isfinite(dir_deg) && have_nominal_dirs) {
-      dir_deg = (signed_speed >= 0.0) ? static_cast<double>(st.flood_dir_deg)
-                                      : static_cast<double>(st.ebb_dir_deg);
-    }
-
-    const double speed = std::abs(signed_speed);
-
-    double east = std::numeric_limits<double>::quiet_NaN();
-    double north = std::numeric_limits<double>::quiet_NaN();
-    if (std::isfinite(dir_deg)) {
-      const double r = deg2rad(dir_deg);
-      east = speed * std::sin(r);
-      north = speed * std::cos(r);
-    }
-
-    std::cout << epoch << ","
-              << iso_utc_from_epoch(epoch) << ","
-              << signed_speed << ","
-              << speed << ",";
-
-    if (std::isfinite(dir_deg)) std::cout << dir_deg;
-    std::cout << ",";
-
-    if (std::isfinite(east)) std::cout << east;
-    std::cout << ",";
-
-    if (std::isfinite(north)) std::cout << north;
-    std::cout << "\n";
+  while (std::fgets(buf.data(), (int)buf.size(), pipe)) {
+    std::cout << buf.data();
   }
+
+  const int rc = pclose_portable(pipe);
+
+  if (old_hfile) setenv_portable("HFILE_PATH", *old_hfile);
+  else unsetenv_portable("HFILE_PATH");
+
+  // popen return semantics differ; treat non-zero as warning/failure
+  if (rc != 0) {
+    std::cerr << "WARNING: tide exited with code " << rc << "\n";
+    std::cerr << "CMD: " << cmd_str << "\n";
+  }
+  return (rc == 0) ? 0 : 3;
 }
 
 } // namespace
 
-int main(int argc, char** argv) {
-  CLI::App app{"Find nearest XTide station (tide/current) and emit prediction CSV."};
+int main(int argc, char **argv) {
+  CLI::App app{"Find nearest XTide stations (tides + currents) and optionally stream predictions via tide(1)."};
 
-  double lat = std::numeric_limits<double>::quiet_NaN();
-  double lon = std::numeric_limits<double>::quiet_NaN();
-  std::vector<std::string> tcd_paths;
+  app.require_subcommand(1);
 
-  std::string start = "2026-01-22 00:00";
-  std::string end   = "2026-01-23 00:00";
-  std::string step  = "00:10";
-
-  std::string product_s = "both";
-  bool utc = true;
-  bool header = true;
-
-  std::string tide_units; // optional: "ft" or "m"
-
+  // Shared options
+  double lat = 0.0, lon = 0.0;
+  std::vector<std::string> tcd_in;
   app.add_option("--lat", lat, "Latitude (deg)")->required();
   app.add_option("--lon", lon, "Longitude (deg)")->required();
-  app.add_option("--tcd", tcd_paths, "Path to harmonics .tcd file (repeatable)")->required();
+  app.add_option("--tcd", tcd_in, "Path to harmonics .tcd file (repeatable)")->required();
 
-  app.add_option("--start", start, "Begin time: \"YYYY-MM-DD HH:MM\" (UTC if --utc)")->default_val(start);
-  app.add_option("--end", end, "End time: \"YYYY-MM-DD HH:MM\" (UTC if --utc)")->default_val(end);
-  app.add_option("--step", step, "Step interval: \"HH:MM\"")->default_val(step);
+  // nearest
+  auto *cmd_nearest = app.add_subcommand("nearest", "List nearest stations (tide/current) and distances.");
+  bool want_tide = true;
+  bool want_current = true;
+  size_t top_n = 5;
+  cmd_nearest->add_flag("--tide,!--no-tide", want_tide, "Include tide stations (default on)");
+  cmd_nearest->add_flag("--current,!--no-current", want_current, "Include current stations (default on)");
+  cmd_nearest->add_option("--top", top_n, "How many results per kind (default 5)")->default_val(5);
 
-  app.add_option("--product", product_s, "tide | current | both")->default_val(product_s);
-  app.add_flag("--utc,!--local", utc, "Force UTC for predictions (default: --utc)");
-  app.add_flag("--header,!--no-header", header, "Print CSV header and metadata (default: --header)");
+  // predict
+  auto *cmd_predict = app.add_subcommand("predict", "Find nearest station of a kind and stream CSV predictions to stdout.");
+  std::string kind_s = "current";
+  std::string begin = "2026-01-01 00:00";
+  std::string end = "2026-01-02 00:00";
+  std::string step = "00:10";
+  std::string tide_bin = "tide";
+  bool utc = false;
+  bool suppress_sunmoon = true;
+  bool omit_units = false;
+  bool emit_metadata = true;
 
-  app.add_option("--tide-units", tide_units, "Preferred tide units: ft | m (optional)");
+  cmd_predict->add_option("--kind", kind_s, "tide | current")->default_val("current");
+  cmd_predict->add_option("--begin", begin, "Begin time: \"YYYY-MM-DD HH:MM\"")->required();
+  cmd_predict->add_option("--end", end, "End time: \"YYYY-MM-DD HH:MM\"")->required();
+  cmd_predict->add_option("--step", step, "Step interval for raw mode: \"HH:MM\"")->default_val("00:10");
+  cmd_predict->add_option("--tide-bin", tide_bin, "Path to tide(1) executable")->default_val("tide");
+  cmd_predict->add_flag("--utc", utc, "Coerce timestamps to UTC (tide -z y)");
+  cmd_predict->add_flag("--no-sunmoon", suppress_sunmoon, "Suppress sun/moon events (default on)")->default_val(true);
+  cmd_predict->add_flag("--omit-units", omit_units, "Omit ft/m/kt suffixes in numeric fields (tide -ou y)");
+  cmd_predict->add_flag("--no-meta", emit_metadata, "Do not print '# ...' metadata header line")->default_val(true);
 
   CLI11_PARSE(app, argc, argv);
 
-  Product product = Product::Both;
-  if (product_s == "tide") product = Product::Tide;
-  else if (product_s == "current") product = Product::Current;
-  else if (product_s == "both") product = Product::Both;
-  else throw CLI::ValidationError("--product must be tide|current|both");
-
   std::vector<fs::path> tcd_files;
-  tcd_files.reserve(tcd_paths.size());
-  for (const auto& s : tcd_paths) tcd_files.emplace_back(fs::path(s));
+  tcd_files.reserve(tcd_in.size());
+  for (const auto &s : tcd_in) tcd_files.emplace_back(fs::path(s));
 
-  // Ensure `tide` sees the same harmonics databases: HFILE_PATH is a colon-separated list. :contentReference[oaicite:6]{index=6}
-  std::ostringstream hfile_path;
-  for (size_t i = 0; i < tcd_paths.size(); ++i) {
-#if defined(_WIN32)
-    // XTide on Windows typically accepts ';' too; but ':' is most common on Unix.
-    if (i) hfile_path << ";";
-#else
-    if (i) hfile_path << ":";
-#endif
-    hfile_path << tcd_paths[i];
-  }
-  set_env("HFILE_PATH", hfile_path.str());
+  const auto stations = load_stations(tcd_files);
 
-  // Load all stations through libtcd.
-  auto stations = load_stations(tcd_files);
+  auto parse_kind = [&](const std::string &s) -> Kind {
+    const auto ls = to_lower_copy(s);
+    if (ls == "tide") return Kind::Tide;
+    if (ls == "current") return Kind::Current;
+    throw std::runtime_error("Invalid --kind. Use 'tide' or 'current'.");
+  };
 
-  auto tide_pick = nearest_station(stations, lat, lon, /*want_current=*/false);
-  auto cur_pick  = nearest_station(stations, lat, lon, /*want_current=*/true);
-
-  if (product == Product::Tide || product == Product::Both) {
-    if (!tide_pick) {
-      std::cerr << "No tide stations found in provided TCD files.\n";
+  if (*cmd_nearest) {
+    if (!want_tide && !want_current) {
+      std::cerr << "Nothing to do: both --no-tide and --no-current set.\n";
       return 2;
     }
-    const auto& [st, dist_m] = *tide_pick;
-    std::cerr << "[tide] nearest station: " << st.name
-              << " (distance_km=" << (dist_m / 1000.0) << ")\n";
 
-    PredictArgs args;
-    args.station_name = st.name;
-    args.start = start;
-    args.end = end;
-    args.step = step;
-    args.utc = utc;
-    if (!tide_units.empty()) args.preferred_tide_units = tide_units;
+    auto print_block = [&](Kind k) {
+      const auto cand = nearest(stations, lat, lon, k, top_n);
+      std::cout << "kind=" << kind_str(k) << " results=" << cand.size() << "\n";
+      std::cout << "distance_km,name,lat,lon,units,min_dir_deg,max_dir_deg,tcd\n";
+      for (const auto &c : cand) {
+        std::cout << std::fixed << std::setprecision(3)
+                  << c.distance_km << ","
+                  << shell_quote_double(c.st.name) << ","
+                  << std::setprecision(6) << c.st.lat_deg << ","
+                  << std::setprecision(6) << c.st.lon_deg << ","
+                  << shell_quote_double(c.st.units) << ","
+                  << c.st.min_dir_deg << ","
+                  << c.st.max_dir_deg << ","
+                  << shell_quote_double(c.st.tcd_path.string())
+                  << "\n";
+      }
+      std::cout << "\n";
+    };
 
-    emit_tide_series(st, args, header);
-    if (product == Product::Both) std::cout << "\n";
+    if (want_tide) print_block(Kind::Tide);
+    if (want_current) print_block(Kind::Current);
+    return 0;
   }
 
-  if (product == Product::Current || product == Product::Both) {
-    if (!cur_pick) {
-      std::cerr << "No current stations found in provided TCD files.\n";
-      return 3;
+  if (*cmd_predict) {
+    const Kind k = parse_kind(kind_s);
+    const auto cand = nearest(stations, lat, lon, k, 1);
+    if (cand.empty()) {
+      std::cerr << "No stations found for kind=" << kind_str(k) << "\n";
+      return 2;
     }
-    const auto& [st, dist_m] = *cur_pick;
-    std::cerr << "[current] nearest station: " << st.name
-              << " (distance_km=" << (dist_m / 1000.0) << ")\n";
 
-    PredictArgs args;
-    args.station_name = st.name;
-    args.start = start;
-    args.end = end;
-    args.step = step;
-    args.utc = utc;
-
-    emit_current_series(st, args, header);
+    const auto &best = cand.front();
+    return run_tide_and_stream(
+      tide_bin,
+      tcd_files,
+      best.st.name,
+      begin,
+      end,
+      step,
+      utc,
+      suppress_sunmoon,
+      omit_units,
+      emit_metadata,
+      best.distance_km,
+      k
+    );
   }
 
   return 0;
