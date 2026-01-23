@@ -12,6 +12,7 @@ permissions:
 
 env:
   LIBTCD_URL: https://flaterco.com/files/xtide/libtcd-2.2.7-r3.tar.xz
+  HARMONICS_URL: https://flaterco.com/files/xtide/harmonics-dwf-20251228-free.tar.xz
   XTIDE_WIN64_ZIP_URL: https://flaterco.com/files/xtide/xtide-2.15-win64.zip
 
 jobs:
@@ -60,11 +61,40 @@ jobs:
         run: |
           cmake --build build -j
 
-      - name: Smoke test (Linux)
+      - name: Download harmonics (.tcd) for smoke test
         run: |
           set -euo pipefail
-          ./build/xtide-nearest --help
-          ./build/xtide-nearest nearest --lat 36.84 --lon -62.42 --tcd /dev/null 2>/dev/null || true
+          rm -rf _deps/harmonics
+          mkdir -p _deps/harmonics
+          cd _deps/harmonics
+          curl -L --retry 3 --retry-delay 2 -o harmonics.tar.xz "${HARMONICS_URL}"
+          tar -xf harmonics.tar.xz
+          TCD_FILE="$(find . -type f -name '*.tcd' | head -n1)"
+          if [ -z "${TCD_FILE}" ]; then
+            echo "ERROR: No .tcd found after extracting harmonics archive"
+            find . -maxdepth 3 -type f | head -n 50 || true
+            exit 1
+          fi
+          echo "HARM_TCD=$PWD/${TCD_FILE#./}" >> "$GITHUB_ENV"
+          echo "Using HARM_TCD=$PWD/${TCD_FILE#./}"
+
+      - name: Smoke test (Linux, real data + log output)
+        run: |
+          set -euo pipefail
+          echo "=== xtide-nearest --help ==="
+          ./build/xtide-nearest --help | head -n 40 || true
+
+          # Test location: New York Harbor area (has both tides + currents)
+          LAT="40.7050"
+          LON="-74.0120"
+
+          echo ""
+          echo "=== Nearest TIDE station (lat=${LAT}, lon=${LON}) ==="
+          ./build/xtide-nearest nearest --lat "${LAT}" --lon "${LON}" --kind tide --tcd "${{ env.HARM_TCD }}"
+
+          echo ""
+          echo "=== Nearest CURRENT station (lat=${LAT}, lon=${LON}) ==="
+          ./build/xtide-nearest nearest --lat "${LAT}" --lon "${LON}" --kind current --tcd "${{ env.HARM_TCD }}"
 
       - name: Package
         run: |
@@ -127,10 +157,35 @@ jobs:
         run: |
           cmake --build build -j
 
-      - name: Smoke test (Linux)
+      - name: Download harmonics (.tcd) for smoke test
         run: |
           set -euo pipefail
-          ./build/xtide-nearest --help
+          rm -rf _deps/harmonics
+          mkdir -p _deps/harmonics
+          cd _deps/harmonics
+          curl -L --retry 3 --retry-delay 2 -o harmonics.tar.xz "${HARMONICS_URL}"
+          tar -xf harmonics.tar.xz
+          TCD_FILE="$(find . -type f -name '*.tcd' | head -n1)"
+          if [ -z "${TCD_FILE}" ]; then
+            echo "ERROR: No .tcd found after extracting harmonics archive"
+            find . -maxdepth 3 -type f | head -n 50 || true
+            exit 1
+          fi
+          echo "HARM_TCD=$PWD/${TCD_FILE#./}" >> "$GITHUB_ENV"
+          echo "Using HARM_TCD=$PWD/${TCD_FILE#./}"
+
+      - name: Smoke test (Linux arm64, real data + log output)
+        run: |
+          set -euo pipefail
+          LAT="40.7050"
+          LON="-74.0120"
+
+          echo "=== Nearest TIDE station (lat=${LAT}, lon=${LON}) ==="
+          ./build/xtide-nearest nearest --lat "${LAT}" --lon "${LON}" --kind tide --tcd "${{ env.HARM_TCD }}"
+
+          echo ""
+          echo "=== Nearest CURRENT station (lat=${LAT}, lon=${LON}) ==="
+          ./build/xtide-nearest nearest --lat "${LAT}" --lon "${LON}" --kind current --tcd "${{ env.HARM_TCD }}"
 
       - name: Package
         run: |
@@ -168,6 +223,7 @@ jobs:
             curl
             tar
             unzip
+            xz
 
       - name: Compute artifact tag
         shell: msys2 {0}
@@ -206,6 +262,24 @@ jobs:
         run: |
           cmake --build build -j
 
+      - name: Download harmonics (.tcd) for smoke test
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          rm -rf _deps/harmonics
+          mkdir -p _deps/harmonics
+          cd _deps/harmonics
+          curl -L --retry 3 --retry-delay 2 -o harmonics.tar.xz "${HARMONICS_URL}"
+          tar -xf harmonics.tar.xz
+          TCD_FILE="$(find . -type f -name '*.tcd' | head -n1)"
+          if [ -z "${TCD_FILE}" ]; then
+            echo "ERROR: No .tcd found after extracting harmonics archive"
+            find . -maxdepth 3 -type f | head -n 50 || true
+            exit 1
+          fi
+          echo "HARM_TCD=$PWD/${TCD_FILE#./}" >> "$GITHUB_ENV"
+          echo "Using HARM_TCD=$PWD/${TCD_FILE#./}"
+
       - name: Download XTide Windows bundle (for tide.exe)
         shell: msys2 {0}
         run: |
@@ -217,17 +291,41 @@ jobs:
           TIDE_EXE="$(find _deps/xtide-win -iname 'tide.exe' | head -n1)"
           if [ ! -f "$TIDE_EXE" ]; then
             echo "ERROR: tide.exe not found inside XTide bundle"
-            find _deps/xtide-win -maxdepth 3 -type f | head -n 50 || true
+            find _deps/xtide-win -maxdepth 4 -type f | head -n 100 || true
             exit 1
           fi
           echo "TIDE_EXE=$TIDE_EXE" >> "$GITHUB_ENV"
+          echo "Using TIDE_EXE=$TIDE_EXE"
 
-      - name: Smoke test (Windows)
+      - name: Smoke test (Windows, real data + log output + predictions)
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          ./build/xtide-nearest.exe --help
-          "${{ env.TIDE_EXE }}" -v
+
+          LAT="40.7050"
+          LON="-74.0120"
+
+          echo "=== Nearest TIDE station (lat=${LAT}, lon=${LON}) ==="
+          ./build/xtide-nearest.exe nearest --lat "${LAT}" --lon "${LON}" --kind tide --tcd "${{ env.HARM_TCD }}"
+
+          echo ""
+          echo "=== Nearest CURRENT station (lat=${LAT}, lon=${LON}) ==="
+          ./build/xtide-nearest.exe nearest --lat "${LAT}" --lon "${LON}" --kind current --tcd "${{ env.HARM_TCD }}"
+
+          echo ""
+          echo "=== Predict CURRENT (CSV, first lines) ==="
+          ./build/xtide-nearest.exe predict \
+            --lat "${LAT}" --lon "${LON}" --kind current \
+            --tcd "${{ env.HARM_TCD }}" \
+            --begin "2026-01-22 00:00" \
+            --end   "2026-01-22 06:00" \
+            --step  "00:30" \
+            --format c --mode r \
+            --tide-bin "${{ env.TIDE_EXE }}" \
+            > out.csv
+
+          echo "--- out.csv (head) ---"
+          sed -n '1,12p' out.csv || true
 
       - name: Package zip (includes tide.exe)
         shell: msys2 {0}
