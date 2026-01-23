@@ -355,16 +355,45 @@ jobs:
           # Hard assertion: must produce rows
           test "$(wc -l < out.csv)" -ge 5
 
-      - name: Package zip (includes tide.exe)
+      - name: Package zip 
         shell: msys2 {0}
         run: |
           set -euo pipefail
+
           rm -rf dist xtide-nearest-${{ env.ARTIFACT_TAG }}-windows-x64.zip
           mkdir -p dist
-          cp -f build/xtide-nearest.exe dist/
+
+          # App + tide.exe
+          cp -f build/xtide-nearest.exe dist/xtide-nearest.exe
           cp -f "${{ env.TIDE_EXE }}" dist/tide.exe
+
+          # MinGW runtime DLLs (critical for portability)
+          cp -f /mingw64/bin/libstdc++-6.dll dist/
+          cp -f /mingw64/bin/libgcc_s_seh-1.dll dist/
+          cp -f /mingw64/bin/libwinpthread-1.dll dist/ || true
+
+          # If libtcd was built/installed as a shared DLL, include it too
+          if [ -d "${{ env.TCD_PREFIX }}/bin" ]; then
+            cp -f "${{ env.TCD_PREFIX }}/bin/"*.dll dist/ || true
+          fi
+
+          # Optional docs
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
+
+          # Sanity: fail packaging if any deps are missing
+          if ldd dist/xtide-nearest.exe | grep -qi "not found"; then
+            echo "ERROR: xtide-nearest.exe still has missing DLL deps:"
+            ldd dist/xtide-nearest.exe || true
+            exit 1
+          fi
+
+          if ldd dist/tide.exe | grep -qi "not found"; then
+            echo "ERROR: tide.exe still has missing DLL deps:"
+            ldd dist/tide.exe || true
+            exit 1
+          fi
+
           ( cd dist && cmake -E tar cfv ../xtide-nearest-${{ env.ARTIFACT_TAG }}-windows-x64.zip --format=zip . )
 
       - name: Upload artifact
