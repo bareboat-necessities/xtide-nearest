@@ -82,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "=== xtide-nearest --help ==="
-          ./build/xtide-nearest --help | head -n 40 || true
+          ./build/xtide-nearest --help | head -n 60 || true
 
           # Test location: New York Harbor area (has both tides + currents)
           LAT="40.7050"
@@ -90,11 +90,13 @@ jobs:
 
           echo ""
           echo "=== Nearest TIDE station (lat=${LAT}, lon=${LON}) ==="
-          ./build/xtide-nearest --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" nearest --kind tide
+          ./build/xtide-nearest --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
+            nearest --no-current --top 1
 
           echo ""
           echo "=== Nearest CURRENT station (lat=${LAT}, lon=${LON}) ==="
-          ./build/xtide-nearest --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" nearest --kind current
+          ./build/xtide-nearest --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
+            nearest --no-tide --top 1
 
       - name: Package
         run: |
@@ -181,11 +183,13 @@ jobs:
           LON="-74.0120"
 
           echo "=== Nearest TIDE station (lat=${LAT}, lon=${LON}) ==="
-          ./build/xtide-nearest --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" nearest --kind tide
+          ./build/xtide-nearest --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
+            nearest --no-current --top 1
 
           echo ""
           echo "=== Nearest CURRENT station (lat=${LAT}, lon=${LON}) ==="
-          ./build/xtide-nearest --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" nearest --kind current
+          ./build/xtide-nearest --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
+            nearest --no-tide --top 1
 
       - name: Package
         run: |
@@ -306,16 +310,18 @@ jobs:
           LON="-74.0120"
 
           echo "=== Nearest TIDE station (lat=${LAT}, lon=${LON}) ==="
-          ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" nearest --kind tide
+          ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
+            nearest --no-current --top 1
 
           echo ""
           echo "=== Nearest CURRENT station (lat=${LAT}, lon=${LON}) ==="
-          ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" nearest --kind current
+          ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
+            nearest --no-tide --top 1
 
           echo ""
           echo "=== Predict CURRENT (CSV, first lines) ==="
-          ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" predict \
-            --kind current \
+          ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
+            predict --kind current \
             --begin "2026-01-22 00:00" \
             --end   "2026-01-22 06:00" \
             --step  "00:30" \
