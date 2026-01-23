@@ -84,7 +84,6 @@ jobs:
           echo "=== xtide-nearest --help ==="
           ./build/xtide-nearest --help | head -n 60 || true
 
-          # Test location: New York Harbor area (has both tides + currents)
           LAT="40.7050"
           LON="-74.0120"
 
@@ -275,14 +274,12 @@ jobs:
           cd _deps/harmonics
           curl -L --retry 3 --retry-delay 2 -o harmonics.tar.xz "${HARMONICS_URL}"
 
-          # The archive contains symlinks that MSYS2 tar may fail to create.
-          # We only need the .tcd file(s), so ignore tar's symlink errors and verify .tcd exists.
+          # Archive has symlinks; MSYS2 tar may complain. We only need *.tcd.
           tar -xf harmonics.tar.xz || true
 
           TCD_FILE="$(find . -type f -name '*.tcd' | head -n1)"
           if [ -z "${TCD_FILE}" ]; then
             echo "ERROR: No .tcd found after extracting harmonics archive"
-            echo "Listing extracted files:"
             find . -maxdepth 4 -type f | head -n 200 || true
             exit 1
           fi
@@ -298,14 +295,22 @@ jobs:
           mkdir -p _deps/xtide-win
           curl -L --retry 3 --retry-delay 2 -o _deps/xtide-win.zip "${XTIDE_WIN64_ZIP_URL}"
           unzip -q _deps/xtide-win.zip -d _deps/xtide-win
+
+          # POSIX path (good for copying within MSYS)
           TIDE_EXE="$(find _deps/xtide-win -iname 'tide.exe' | head -n1)"
           if [ ! -f "$TIDE_EXE" ]; then
             echo "ERROR: tide.exe not found inside XTide bundle"
             find _deps/xtide-win -maxdepth 4 -type f | head -n 100 || true
             exit 1
           fi
-          echo "TIDE_EXE=$TIDE_EXE" >> "$GITHUB_ENV"
+
+          # Native Windows path (required for cmd.exe / system() launching)
+          TIDE_EXE_WIN="$(cygpath -w "$TIDE_EXE")"
+
+          printf 'TIDE_EXE=%s\n' "$TIDE_EXE" >> "$GITHUB_ENV"
+          printf 'TIDE_EXE_WIN=%s\n' "$TIDE_EXE_WIN" >> "$GITHUB_ENV"
           echo "Using TIDE_EXE=$TIDE_EXE"
+          echo "Using TIDE_EXE_WIN=$TIDE_EXE_WIN"
 
       - name: Smoke test (Windows, real data + log output + predictions)
         shell: msys2 {0}
@@ -324,6 +329,11 @@ jobs:
           ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
             nearest --no-tide --top 1
 
+          # Ensure tide.exe can find the downloaded harmonics DB
+          HFILE_DIR_WIN="$(cygpath -w "$(dirname "${{ env.HARM_TCD }}")")"
+          export HFILE_PATH="$HFILE_DIR_WIN"
+          echo "HFILE_PATH=$HFILE_PATH"
+
           echo ""
           echo "=== Predict CURRENT (CSV, first lines) ==="
           ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
@@ -331,7 +341,7 @@ jobs:
             --begin "2026-01-22 00:00" \
             --end   "2026-01-22 06:00" \
             --step  "00:30" \
-            --tide-bin "${{ env.TIDE_EXE }}" \
+            --tide-bin "${{ env.TIDE_EXE_WIN }}" \
             > out.csv
 
           echo "--- out.csv (head) ---"
