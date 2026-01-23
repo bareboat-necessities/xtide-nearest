@@ -139,4 +139,18 @@ version=1
 - Linux: ~/.config/xtide-nearest/tcd.conf (or $XDG_CONFIG_HOME/xtide-nearest/tcd.conf)
 - Windows: %APPDATA%\xtide-nearest\tcd.conf
 
+Sample tdc.conf:
+
+```
+# xtide-nearest TCD search paths
+
+/etc/tcdata
+/usr/share/tcdata
+/usr/share/opencpn/tcdata
+/usr/local/share/opencpn/tcdata
+
+# You can also pin an exact file:
+#/home/user/.tcdata/harmonics.tcd
+```
+
 
