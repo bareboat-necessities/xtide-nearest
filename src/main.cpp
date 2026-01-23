@@ -36,6 +36,9 @@ extern "C" {
 #endif
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
 #include <windows.h>
 #endif
 
@@ -48,8 +51,8 @@ constexpr double kPi = 3.141592653589793238462643383279502884;
 
 // Cache policy: keep nearest station selection for "sailboat-ish" movement.
 constexpr int64_t kCacheTtlSec = 20 * 60;      // 20 min
-constexpr double kCacheMaxSpeedKt = 15.0;      // default sailboat speed bound
-constexpr double kCacheMinRadiusKm = 0.5;      // always allow small jitter even at dt~0
+constexpr double  kCacheMaxSpeedKt = 15.0;     // default sailboat speed bound
+constexpr double  kCacheMinRadiusKm = 0.5;     // always allow small jitter even at dt~0
 
 double deg2rad(double d) { return d * (kPi / 180.0); }
 
@@ -184,7 +187,7 @@ bool is_current_units(const std::string& units) {
 // ------------------------
 
 std::vector<fs::path> default_tcd_dirs() {
-  // User-requested defaults (Linux-ish paths). We keep them even on other POSIX.
+  // User-requested defaults (Linux-ish paths).
   std::vector<fs::path> dirs = {
       "/etc/tcdata",
       "/usr/share/tcdata",
@@ -194,11 +197,10 @@ std::vector<fs::path> default_tcd_dirs() {
 
 #ifdef _WIN32
   // Also search near the executable (common for Windows zip installs).
-  // (We keep this minimal; config/--tcd is still the primary mechanism.)
-  wchar_t buf[MAX_PATH];
-  DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+  wchar_t wbuf[MAX_PATH];
+  DWORD n = GetModuleFileNameW(nullptr, wbuf, MAX_PATH);
   if (n > 0 && n < MAX_PATH) {
-    fs::path exe = fs::path(buf);
+    fs::path exe = fs::path(wbuf);
     fs::path d = exe.parent_path();
     dirs.push_back(d);
     dirs.push_back(d / "tcdata");
@@ -290,43 +292,57 @@ fs::path norm_abs(const fs::path& p) {
   return a;
 }
 
-void add_unique_path(std::vector<fs::path>& out, std::unordered_set<std::string>& seen, const fs::path& p) {
+std::string norm_key(const fs::path& p) {
+#ifdef _WIN32
+  return to_lower_copy(norm_abs(p).string());
+#else
+  return norm_abs(p).string();
+#endif
+}
+
+void add_unique_path(std::vector<fs::path>& out,
+                     std::unordered_set<std::string>& seen,
+                     const fs::path& p) {
   fs::path a = norm_abs(p);
-  std::string key = a.string();
+  std::string key = norm_key(a);
   if (seen.insert(key).second) out.push_back(std::move(a));
 }
 
-void discover_tcd_from_dir_2levels(const fs::path& dir, std::vector<fs::path>& out, std::unordered_set<std::string>& seen) {
-  std::error_code ec;
-  if (!fs::exists(dir, ec) || ec) return;
-  if (!fs::is_directory(dir, ec) || ec) return;
+void discover_tcd_from_dir_2levels(const fs::path& dir,
+                                  std::vector<fs::path>& out,
+                                  std::unordered_set<std::string>& seen) {
+  std::error_code ec0;
+  if (!fs::exists(dir, ec0) || ec0) return;
+  if (!fs::is_directory(dir, ec0) || ec0) return;
 
-  // depth 0: dir/*.tcd
-  for (const auto& e0 : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec)) {
-    if (ec) break;
-    const fs::path p0 = e0.path();
-    if (e0.is_regular_file(ec) && !ec && is_tcd_file(p0)) add_unique_path(out, seen, p0);
-  }
-
-  // depth 1: dir/*/*.tcd
-  for (const auto& e1 : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec)) {
-    if (ec) break;
-    if (!e1.is_directory(ec) || ec) continue;
-    const fs::path d1 = e1.path();
-    for (const auto& f1 : fs::directory_iterator(d1, fs::directory_options::skip_permission_denied, ec)) {
+  auto scan_files_in_dir = [&](const fs::path& d) {
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(d, fs::directory_options::skip_permission_denied, ec)) {
       if (ec) break;
-      if (f1.is_regular_file(ec) && !ec && is_tcd_file(f1.path())) add_unique_path(out, seen, f1.path());
+      if (e.is_regular_file(ec) && !ec && is_tcd_file(e.path())) add_unique_path(out, seen, e.path());
     }
+  };
 
-    // depth 2: dir/*/*/*.tcd
-    for (const auto& e2 : fs::directory_iterator(d1, fs::directory_options::skip_permission_denied, ec)) {
-      if (ec) break;
-      if (!e2.is_directory(ec) || ec) continue;
+  // depth 0
+  scan_files_in_dir(dir);
+
+  // depth 1 and 2
+  std::error_code ec1;
+  for (const auto& e1 : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec1)) {
+    if (ec1) break;
+    std::error_code ecA;
+    if (!e1.is_directory(ecA) || ecA) continue;
+    const fs::path d1 = e1.path();
+
+    scan_files_in_dir(d1);  // depth 1
+
+    std::error_code ec2;
+    for (const auto& e2 : fs::directory_iterator(d1, fs::directory_options::skip_permission_denied, ec2)) {
+      if (ec2) break;
+      std::error_code ecB;
+      if (!e2.is_directory(ecB) || ecB) continue;
       const fs::path d2 = e2.path();
-      for (const auto& f2 : fs::directory_iterator(d2, fs::directory_options::skip_permission_denied, ec)) {
-        if (ec) break;
-        if (f2.is_regular_file(ec) && !ec && is_tcd_file(f2.path())) add_unique_path(out, seen, f2.path());
-      }
+      scan_files_in_dir(d2); // depth 2
     }
   }
 }
@@ -335,7 +351,8 @@ std::vector<fs::path> discover_tcd_files(const std::vector<fs::path>& sources, b
   std::vector<fs::path> out;
   std::unordered_set<std::string> seen;
 
-  auto add_source = [&](const fs::path& src) {
+  auto add_source = [&](const fs::path& src0) {
+    fs::path src = src0;
     std::error_code ec;
     if (!fs::exists(src, ec) || ec) return;
 
@@ -355,7 +372,8 @@ std::vector<fs::path> discover_tcd_files(const std::vector<fs::path>& sources, b
     for (const auto& d : default_tcd_dirs()) add_source(d);
   }
 
-  std::sort(out.begin(), out.end(), [](const fs::path& a, const fs::path& b) { return a.string() < b.string(); });
+  std::sort(out.begin(), out.end(),
+            [](const fs::path& a, const fs::path& b) { return a.string() < b.string(); });
   return out;
 }
 
@@ -410,7 +428,6 @@ int64_t now_epoch_s() {
 // ------------------------
 
 bool is_safe_val_char(unsigned char c) {
-  // Keep paths readable but escape separators and weird chars.
   if (std::isalnum(c)) return true;
   switch (c) {
     case '-': case '_': case '.': case '/': case '\\': case ':':
@@ -522,12 +539,34 @@ void write_kv_cache(const fs::path& p, const std::unordered_map<std::string, std
   std::error_code ec;
   fs::create_directories(p.parent_path(), ec);
 
-  std::ofstream out(p, std::ios::trunc);
+  // Write via temp file then rename (best-effort atomic).
+  fs::path tmp = p;
+  tmp += ".tmp";
+
+  std::ofstream out(tmp, std::ios::trunc);
   if (!out) throw std::runtime_error("Failed to open cache for write: " + p.string());
 
   out << "# xtide-nearest cache (key=value, percent-encoded)\n";
-  for (const auto& [k, v] : kv) {
-    out << k << "=" << pct_encode(v) << "\n";
+
+  std::vector<std::string> keys;
+  keys.reserve(kv.size());
+  for (const auto& it : kv) keys.push_back(it.first);
+  std::sort(keys.begin(), keys.end());
+
+  for (const auto& k : keys) {
+    auto it = kv.find(k);
+    if (it == kv.end()) continue;
+    out << k << "=" << pct_encode(it->second) << "\n";
+  }
+  out.close();
+
+  fs::rename(tmp, p, ec);
+  if (ec) {
+    // Fallback.
+    ec.clear();
+    fs::remove(p, ec);
+    ec.clear();
+    fs::rename(tmp, p, ec);
   }
 }
 
@@ -556,7 +595,7 @@ void kv_set_station(std::unordered_map<std::string, std::string>& kv, const std:
   kv[prefix + "_units"] = st.units;
   kv[prefix + "_min_dir"] = std::to_string(st.min_dir_deg);
   kv[prefix + "_max_dir"] = std::to_string(st.max_dir_deg);
-  kv[prefix + "_tcd"] = st.tcd_path.string();
+  kv[prefix + "_tcd"] = norm_abs(st.tcd_path).string();
 }
 
 bool kv_get_station(const std::unordered_map<std::string, std::string>& kv, const std::string& prefix, Station& st, Kind k) {
@@ -584,14 +623,23 @@ bool load_cache(const fs::path& cache_path, CacheRecord& rec) {
   std::unordered_map<std::string, std::string> kv;
   if (!read_kv_cache(cache_path, kv)) return false;
 
-  rec.version = i_from_str(kv["version"], 1);
-  rec.epoch_s = i64_from_str(kv["epoch_s"], 0);
-  rec.lat = d_from_str(kv["lat"], 0.0);
-  rec.lon = d_from_str(kv["lon"], 0.0);
-  rec.fingerprint = kv["fingerprint"];
+  auto itv = kv.find("version");
+  rec.version = (itv == kv.end()) ? 1 : i_from_str(itv->second, 1);
 
-  rec.has_tide = (kv["has_tide"] == "1");
-  rec.has_current = (kv["has_current"] == "1");
+  auto ite = kv.find("epoch_s");
+  rec.epoch_s = (ite == kv.end()) ? 0 : i64_from_str(ite->second, 0);
+
+  auto itlat = kv.find("lat");
+  rec.lat = (itlat == kv.end()) ? 0.0 : d_from_str(itlat->second, 0.0);
+
+  auto itlon = kv.find("lon");
+  rec.lon = (itlon == kv.end()) ? 0.0 : d_from_str(itlon->second, 0.0);
+
+  auto itf = kv.find("fingerprint");
+  rec.fingerprint = (itf == kv.end()) ? "" : itf->second;
+
+  rec.has_tide = (kv.find("has_tide") != kv.end() && kv.at("has_tide") == "1");
+  rec.has_current = (kv.find("has_current") != kv.end() && kv.at("has_current") == "1");
 
   if (rec.has_tide) rec.has_tide = kv_get_station(kv, "tide", rec.tide, Kind::Tide);
   if (rec.has_current) rec.has_current = kv_get_station(kv, "current", rec.current, Kind::Current);
@@ -650,7 +698,6 @@ std::vector<Station> load_stations_from_one_tcd(const fs::path& tcd_path) {
     const NV_INT32 got = read_tide_record(static_cast<NV_INT32>(i), &rec);
     if (got < 0) continue;
 
-    // rec.header.name is a fixed-size array, not a pointer.
     std::string name = trim_copy(std::string(rec.header.name));
     if (name.empty()) continue;
 
@@ -667,7 +714,7 @@ std::vector<Station> load_stations_from_one_tcd(const fs::path& tcd_path) {
     st.units = std::move(units);
     st.min_dir_deg = static_cast<int>(rec.min_direction);
     st.max_dir_deg = static_cast<int>(rec.max_direction);
-    st.tcd_path = tcd_path;
+    st.tcd_path = norm_abs(tcd_path);
 
     stations.push_back(std::move(st));
   }
@@ -708,8 +755,8 @@ std::vector<Candidate> nearest(const std::vector<Station>& stations,
 }
 
 // XTide expects HFILE_PATH to be a path list of *directories* that contain .tcd files.
-// Do NOT pass the .tcd file paths themselves.
-std::string join_hfile_path(const std::vector<fs::path>& tcd_files) {
+// We also put the chosen station's own .tcd directory FIRST (important if names collide).
+std::string join_hfile_path(const std::vector<fs::path>& tcd_files, const fs::path& prefer_dir) {
 #ifdef _WIN32
   const char sep = ';';
 #else
@@ -717,29 +764,35 @@ std::string join_hfile_path(const std::vector<fs::path>& tcd_files) {
 #endif
 
   std::vector<std::string> dirs;
-  dirs.reserve(tcd_files.size());
+  dirs.reserve(tcd_files.size() + 1);
 
   auto norm_dir = [&](fs::path p) -> fs::path {
-    // If user passed a .tcd file, use its parent directory.
-    if (p.has_extension() && ieq(to_lower_copy(p.extension().string()), ".tcd")) {
-      p = p.parent_path();
-    }
+    if (p.has_extension() && is_tcd_file(p)) p = p.parent_path();
     if (p.empty()) p = fs::path(".");
-    // Make absolute so child process can find it regardless of cwd changes.
-    std::error_code ec;
-    fs::path abs = fs::absolute(p, ec);
-    if (ec) abs = p;
-    abs = abs.lexically_normal();
-#ifdef _WIN32
-    abs.make_preferred();
-#endif
-    return abs;
+    return norm_abs(p);
   };
 
-  for (const auto& p : tcd_files) {
-    fs::path d = norm_dir(p);
+  auto push_unique = [&](const fs::path& d) {
     std::string ds = d.string();
-    if (std::find(dirs.begin(), dirs.end(), ds) == dirs.end()) dirs.push_back(std::move(ds));
+#ifdef _WIN32
+    std::string key = to_lower_copy(ds);
+#else
+    std::string key = ds;
+#endif
+    for (const auto& existing : dirs) {
+#ifdef _WIN32
+      if (to_lower_copy(existing) == key) return;
+#else
+      if (existing == key) return;
+#endif
+    }
+    dirs.push_back(std::move(ds));
+  };
+
+  if (!prefer_dir.empty()) push_unique(norm_dir(prefer_dir));
+
+  for (const auto& p : tcd_files) {
+    push_unique(norm_dir(p));
   }
 
   std::ostringstream oss;
@@ -768,7 +821,6 @@ std::string win_errstr(DWORD err) {
   DWORD n = FormatMessageW(flags, nullptr, err, 0, (LPWSTR)&buf, 0, nullptr);
   std::string out;
   if (n && buf) {
-    // Convert UTF-16 to UTF-8
     int m = WideCharToMultiByte(CP_UTF8, 0, buf, -1, nullptr, 0, nullptr, nullptr);
     if (m > 0) {
       out.resize(static_cast<size_t>(m - 1));
@@ -816,7 +868,7 @@ std::wstring build_cmdline_win(const std::wstring& exe, const std::vector<std::w
   return cmd;
 }
 
-// Run tide.exe without cmd.exe parsing (no popen/system). Stream stdout to this process stdout.
+// Run tide.exe without cmd.exe parsing. Stream stdout to this process stdout.
 int run_tide_win_stream(const std::string& tide_bin_utf8,
                         const std::vector<std::wstring>& args_w,
                         const std::string& debug_cmd_utf8) {
@@ -838,7 +890,7 @@ int run_tide_win_stream(const std::string& tide_bin_utf8,
   si.dwFlags = STARTF_USESTDHANDLES;
   si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
   si.hStdOutput = childStdoutWrite;
-  si.hStdError = GetStdHandle(STD_ERROR_HANDLE); // keep disclaimers/warnings on stderr
+  si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
   PROCESS_INFORMATION pi{};
 
@@ -847,7 +899,6 @@ int run_tide_win_stream(const std::string& tide_bin_utf8,
   std::vector<wchar_t> cmdBuf(cmdline.begin(), cmdline.end());
   cmdBuf.push_back(L'\0');
 
-  // lpApplicationName = nullptr enables PATH lookup if tide_bin is "tide" / "tide.exe"
   BOOL ok = CreateProcessW(
       nullptr,
       cmdBuf.data(),
@@ -870,7 +921,6 @@ int run_tide_win_stream(const std::string& tide_bin_utf8,
     return 2;
   }
 
-  // Read child stdout and stream to our stdout.
   std::array<char, 8192> buf{};
   DWORD nread = 0;
   while (ReadFile(childStdoutRead, buf.data(), static_cast<DWORD>(buf.size()), &nread, nullptr) && nread > 0) {
@@ -898,40 +948,40 @@ int run_tide_win_stream(const std::string& tide_bin_utf8,
 
 int run_tide_and_stream(const std::string& tide_bin,
                         const std::vector<fs::path>& tcd_files,
-                        const std::string& station_name,
+                        const Station& st,
                         const std::string& begin,
                         const std::string& end,
                         const std::string& step_hhmm,
+                        const std::string& mode,
+                        const std::string& format,
                         bool utc,
                         bool suppress_sunmoon,
                         bool omit_units,
                         bool emit_metadata,
-                        double dist_km,
-                        Kind kind) {
+                        double dist_km) {
   const auto old_hfile = getenv_str("HFILE_PATH");
-  setenv_portable("HFILE_PATH", join_hfile_path(tcd_files));
+  setenv_portable("HFILE_PATH", join_hfile_path(tcd_files, st.tcd_path));
 
 #ifdef _WIN32
-  // Build argv for tide.exe as discrete args (no shell).
   std::vector<std::wstring> args_w;
-  args_w.emplace_back(L"-l");  args_w.emplace_back(widen_utf8(station_name));
+  args_w.emplace_back(L"-l");  args_w.emplace_back(widen_utf8(st.name));
   args_w.emplace_back(L"-b");  args_w.emplace_back(widen_utf8(begin));
   args_w.emplace_back(L"-e");  args_w.emplace_back(widen_utf8(end));
-  args_w.emplace_back(L"-m");  args_w.emplace_back(L"r");
-  args_w.emplace_back(L"-f");  args_w.emplace_back(L"c");
+  args_w.emplace_back(L"-m");  args_w.emplace_back(widen_utf8(mode));
+  args_w.emplace_back(L"-f");  args_w.emplace_back(widen_utf8(format));
   args_w.emplace_back(L"-s");  args_w.emplace_back(widen_utf8(step_hhmm));
   args_w.emplace_back(L"-z");  args_w.emplace_back(utc ? L"y" : L"n");
 
   if (suppress_sunmoon) { args_w.emplace_back(L"-em"); args_w.emplace_back(L"pSsMm"); }
   if (omit_units) { args_w.emplace_back(L"-ou"); args_w.emplace_back(L"y"); }
 
-  // Debug string (for stderr on failure)
   std::ostringstream dbg;
   dbg << shell_quote_double(tide_bin)
-      << " -l " << shell_quote_double(station_name)
+      << " -l " << shell_quote_double(st.name)
       << " -b " << shell_quote_double(begin)
       << " -e " << shell_quote_double(end)
-      << " -m r -f c"
+      << " -m " << shell_quote_double(mode)
+      << " -f " << shell_quote_double(format)
       << " -s " << shell_quote_double(step_hhmm)
       << " -z " << (utc ? "y" : "n");
   if (suppress_sunmoon) dbg << " -em pSsMm";
@@ -939,8 +989,8 @@ int run_tide_and_stream(const std::string& tide_bin,
   const std::string cmd_str = dbg.str();
 
   if (emit_metadata) {
-    std::cout << "# kind=" << kind_str(kind)
-              << " station=" << station_name
+    std::cout << "# kind=" << kind_str(st.kind)
+              << " station=" << st.name
               << " distance_km=" << std::fixed << std::setprecision(3) << dist_km
               << " begin=" << begin
               << " end=" << end
@@ -957,13 +1007,13 @@ int run_tide_and_stream(const std::string& tide_bin,
   return rc;
 
 #else
-  // POSIX: use popen() and shell quoting.
   std::ostringstream cmd;
   cmd << shell_quote_double(tide_bin)
-      << " -l " << shell_quote_double(station_name)
+      << " -l " << shell_quote_double(st.name)
       << " -b " << shell_quote_double(begin)
       << " -e " << shell_quote_double(end)
-      << " -m r -f c"
+      << " -m " << shell_quote_double(mode)
+      << " -f " << shell_quote_double(format)
       << " -s " << shell_quote_double(step_hhmm)
       << " -z " << (utc ? "y" : "n");
 
@@ -981,8 +1031,8 @@ int run_tide_and_stream(const std::string& tide_bin,
   }
 
   if (emit_metadata) {
-    std::cout << "# kind=" << kind_str(kind)
-              << " station=" << station_name
+    std::cout << "# kind=" << kind_str(st.kind)
+              << " station=" << st.name
               << " distance_km=" << std::fixed << std::setprecision(3) << dist_km
               << " begin=" << begin
               << " end=" << end
@@ -997,7 +1047,6 @@ int run_tide_and_stream(const std::string& tide_bin,
   }
 
   const int status = pclose_portable(pipe);
-
   int exit_code = status;
   if (WIFEXITED(status)) exit_code = WEXITSTATUS(status);
 
@@ -1034,7 +1083,6 @@ void update_cache_from_stations(const fs::path& cache_path,
     rec.current = best_c.front().st;
   }
 
-  // Only save if at least one kind was found.
   if (rec.has_tide || rec.has_current) {
     try {
       save_cache(cache_path, rec);
@@ -1048,12 +1096,11 @@ void update_cache_from_stations(const fs::path& cache_path,
 
 int main(int argc, char** argv) {
   CLI::App app{"Find nearest XTide stations (tides + currents) and optionally stream predictions via tide(1)."};
-
   app.require_subcommand(1);
 
   double lat = 0.0, lon = 0.0;
 
-  // --tcd can now be omitted if config/default paths find data.
+  // --tcd can be omitted if config/default paths find data.
   std::vector<std::string> tcd_in;
   std::string tcd_config_path;
   bool no_default_paths = false;
@@ -1066,9 +1113,10 @@ int main(int argc, char** argv) {
 
   app.add_option("--tcd", tcd_in,
                  "TCD source (repeatable): a .tcd file OR a directory (searched up to 2 levels)");
+
   app.add_option("--tcd-config", tcd_config_path,
-                 "Config file listing .tcd files and/or directories to search (lines, # comments). "
-                 "If omitted, uses $XTIDE_NEAREST_CONFIG or a platform default.")->default_val("");
+                 "Config file listing .tcd files and/or directories to search (one per line, # comments). "
+                 "If omitted, uses $XTIDE_NEAREST_CONFIG or platform default.")->default_val("");
 
   app.add_flag("--no-default-tcd-paths", no_default_paths,
                "Disable built-in default TCD search dirs (e.g. /usr/share/tcdata, /usr/share/opencpn/tcdata)");
@@ -1081,18 +1129,20 @@ int main(int argc, char** argv) {
   bool want_tide = true;
   bool want_current = true;
   size_t top_n = 5;
-  cmd_nearest->add_flag("--tide,!--no-tide", want_tide, "Include tide stations (default on)");
-  cmd_nearest->add_flag("--current,!--no-current", want_current, "Include current stations (default on)");
+  cmd_nearest->add_flag("--tide,!--no-tide", want_tide, "Include tide stations (default on)")->default_val(true);
+  cmd_nearest->add_flag("--current,!--no-current", want_current, "Include current stations (default on)")->default_val(true);
   cmd_nearest->add_option("--top", top_n, "How many results per kind")->default_val(5);
 
-  auto* cmd_predict = app.add_subcommand("predict", "Find nearest station of a kind and stream CSV predictions to stdout.");
+  auto* cmd_predict = app.add_subcommand("predict", "Find nearest station of a kind and stream predictions to stdout.");
   std::string kind_s = "current";
   std::string begin;
   std::string end;
   std::string step = "00:10";
   std::string tide_bin = "tide";
+  std::string mode = "r";
+  std::string format = "c";
   bool utc = false;
-  bool suppress_sunmoon = true;
+  bool include_sunmoon = false;      // default: suppress for clean CSV
   bool omit_units = false;
   bool emit_metadata = true;
 
@@ -1101,10 +1151,18 @@ int main(int argc, char** argv) {
   cmd_predict->add_option("--end", end, "End time: \"YYYY-MM-DD HH:MM\"")->required();
   cmd_predict->add_option("--step", step, "Step interval for raw mode: \"HH:MM\"")->default_val("00:10");
   cmd_predict->add_option("--tide-bin", tide_bin, "Path to tide(1) executable")->default_val("tide");
-  cmd_predict->add_flag("--utc", utc, "Coerce timestamps to UTC (tide -z y)");
-  cmd_predict->add_flag("--no-sunmoon", suppress_sunmoon, "Suppress sun/moon events (default on)")->default_val(true);
-  cmd_predict->add_flag("--omit-units", omit_units, "Omit unit suffix in numeric fields (tide -ou y)");
-  cmd_predict->add_flag("--no-meta", emit_metadata, "Disable metadata header line")->default_val(true);
+  cmd_predict->add_option("--mode", mode, "tide -m mode (default r)")->default_val("r");
+  cmd_predict->add_option("--format", format, "tide -f format (default c)")->default_val("c");
+  cmd_predict->add_flag("--utc", utc, "Coerce timestamps to UTC (tide -z y)")->default_val(false);
+
+  cmd_predict->add_flag("--sunmoon,!--no-sunmoon", include_sunmoon,
+                        "Include sun/moon events (default: suppressed)")->default_val(false);
+
+  cmd_predict->add_flag("--omit-units", omit_units,
+                        "Omit unit suffix in numeric fields (tide -ou y)")->default_val(false);
+
+  cmd_predict->add_flag("--meta,!--no-meta", emit_metadata,
+                        "Emit metadata header line (default on)")->default_val(true);
 
   CLI11_PARSE(app, argc, argv);
 
@@ -1118,7 +1176,6 @@ int main(int argc, char** argv) {
   // Build sources list: config + CLI + defaults.
   std::vector<fs::path> sources;
 
-  // config resolution
   std::optional<fs::path> cfg_path;
   if (!tcd_config_path.empty()) cfg_path = fs::path(tcd_config_path);
   else cfg_path = default_config_path_guess();
@@ -1129,10 +1186,8 @@ int main(int argc, char** argv) {
     }
   }
 
-  // CLI sources
   for (const auto& s : tcd_in) sources.emplace_back(fs::path(s));
 
-  // Discover actual .tcd files
   const bool include_defaults = !no_default_paths;
   const auto tcd_files = discover_tcd_files(sources, include_defaults);
 
@@ -1144,7 +1199,6 @@ int main(int argc, char** argv) {
 
   const std::string fp = tcd_fingerprint(tcd_files);
 
-  // Cache setup
   const fs::path cache_path = cache_file.empty() ? default_cache_path() : fs::path(cache_file);
   CacheRecord cache;
   const bool cache_loaded = (!no_cache) ? load_cache(cache_path, cache) : false;
@@ -1174,14 +1228,16 @@ int main(int argc, char** argv) {
                   << "\n\n";
       };
 
-      if (want_tide && cache.has_tide) print_one(Kind::Tide, cache.tide);
-      else if (want_tide) std::cerr << "WARNING: cache has no tide entry; scanning...\n";
-
-      if (want_current && cache.has_current) print_one(Kind::Current, cache.current);
-      else if (want_current) std::cerr << "WARNING: cache has no current entry; scanning...\n";
-
-      // If both were served from cache, done.
-      if ((!want_tide || cache.has_tide) && (!want_current || cache.has_current)) return 0;
+      bool served_all = true;
+      if (want_tide) {
+        if (cache.has_tide) print_one(Kind::Tide, cache.tide);
+        else served_all = false;
+      }
+      if (want_current) {
+        if (cache.has_current) print_one(Kind::Current, cache.current);
+        else served_all = false;
+      }
+      if (served_all) return 0;
       // else fall through to full scan for missing entries
     }
 
@@ -1231,8 +1287,9 @@ int main(int argc, char** argv) {
       if (st) {
         const double dk = haversine_km(lat, lon, st->lat_deg, st->lon_deg);
         return run_tide_and_stream(
-          tide_bin, tcd_files, st->name, begin, end, step, utc,
-          suppress_sunmoon, omit_units, emit_metadata, dk, k
+          tide_bin, tcd_files, *st, begin, end, step, mode, format, utc,
+          /*suppress_sunmoon=*/!include_sunmoon,
+          omit_units, emit_metadata, dk
         );
       }
     }
@@ -1258,16 +1315,17 @@ int main(int argc, char** argv) {
     return run_tide_and_stream(
       tide_bin,
       tcd_files,
-      best.st.name,
+      best.st,
       begin,
       end,
       step,
+      mode,
+      format,
       utc,
-      suppress_sunmoon,
+      /*suppress_sunmoon=*/!include_sunmoon,
       omit_units,
       emit_metadata,
-      best.distance_km,
-      k
+      best.distance_km
     );
   }
 
