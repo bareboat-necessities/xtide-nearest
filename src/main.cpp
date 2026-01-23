@@ -36,7 +36,6 @@ extern "C" {
 #endif
 
 #ifdef _WIN32
-#define NOMINMAX
 #include <windows.h>
 #endif
 
@@ -1066,7 +1065,7 @@ int main(int argc, char** argv) {
   app.add_option("--lon", lon, "Longitude (deg)")->required();
 
   app.add_option("--tcd", tcd_in,
-                 "TCD source (repeatable): a .tcd file OR a directory (searched up to 2 levels)")->default_val({});
+                 "TCD source (repeatable): a .tcd file OR a directory (searched up to 2 levels)");
   app.add_option("--tcd-config", tcd_config_path,
                  "Config file listing .tcd files and/or directories to search (lines, # comments). "
                  "If omitted, uses $XTIDE_NEAREST_CONFIG or a platform default.")->default_val("");
