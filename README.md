@@ -65,6 +65,19 @@ xz -cd harmonics-dwf-20251228-free.tar.xz | tar xvf -
   --step  "00:10" 
 ```
 
+Output:
+```
+# kind=current station=Dimond Reef (depth 11 ft), Upper Bay, New York Harbor, New York Current distance_km=0.818 begin=2026-01-22 00:00 end=2026-01-23 00:00 step=00:10 utc=false
+Dimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769058000,0.445081
+Dimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769058600,0.379907
+Dimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769059200,0.328561
+Dimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769059800,0.291488
+Dimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769060400,0.268112
+Dimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769061000,0.256929
+Dimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769061600,0.255676
+...
+```
+
 ### Tide only 
 
 ```bash
@@ -77,3 +90,14 @@ xz -cd harmonics-dwf-20251228-free.tar.xz | tar xvf -
   --step  "00:10" 
 ```
 
+Output:
+```
+# kind=tide station=The Battery, New York Harbor, New York distance_km=0.193 begin=2026-01-22 00:00 end=2026-01-23 00:00 step=00:10 utc=false
+The Battery| New York Harbor| New York,1769058000,3.281012
+The Battery| New York Harbor| New York,1769058600,3.131090
+The Battery| New York Harbor| New York,1769059200,2.970155
+The Battery| New York Harbor| New York,1769059800,2.799378
+The Battery| New York Harbor| New York,1769060400,2.620230
+The Battery| New York Harbor| New York,1769061000,2.434448
+...
+```
