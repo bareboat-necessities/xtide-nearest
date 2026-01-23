@@ -12,6 +12,7 @@ permissions:
 
 env:
   LIBTCD_URL: https://flaterco.com/files/xtide/libtcd-2.2.7-r3.tar.xz
+  XTIDE_WIN64_ZIP_URL: https://flaterco.com/files/xtide/xtide-2.15-win64.zip
 
 jobs:
   linux-amd64:
@@ -166,6 +167,7 @@ jobs:
             make
             curl
             tar
+            unzip
 
       - name: Compute artifact tag
         shell: msys2 {0}
@@ -204,19 +206,37 @@ jobs:
         run: |
           cmake --build build -j
 
+      - name: Download XTide Windows bundle (for tide.exe)
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          rm -rf _deps/xtide-win
+          mkdir -p _deps/xtide-win
+          curl -L --retry 3 --retry-delay 2 -o _deps/xtide-win.zip "${XTIDE_WIN64_ZIP_URL}"
+          unzip -q _deps/xtide-win.zip -d _deps/xtide-win
+          TIDE_EXE="$(find _deps/xtide-win -iname 'tide.exe' | head -n1)"
+          if [ ! -f "$TIDE_EXE" ]; then
+            echo "ERROR: tide.exe not found inside XTide bundle"
+            find _deps/xtide-win -maxdepth 3 -type f | head -n 50 || true
+            exit 1
+          fi
+          echo "TIDE_EXE=$TIDE_EXE" >> "$GITHUB_ENV"
+
       - name: Smoke test (Windows)
         shell: msys2 {0}
         run: |
           set -euo pipefail
           ./build/xtide-nearest.exe --help
+          "${{ env.TIDE_EXE }}" -v
 
-      - name: Package zip
+      - name: Package zip (includes tide.exe)
         shell: msys2 {0}
         run: |
           set -euo pipefail
           rm -rf dist xtide-nearest-${{ env.ARTIFACT_TAG }}-windows-x64.zip
           mkdir -p dist
           cp -f build/xtide-nearest.exe dist/
+          cp -f "${{ env.TIDE_EXE }}" dist/tide.exe
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
           ( cd dist && cmake -E tar cfv ../xtide-nearest-${{ env.ARTIFACT_TAG }}-windows-x64.zip --format=zip . )
