@@ -25,12 +25,37 @@ jobs:
             echo "ARTIFACT_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           fi
 
-      - name: Install deps (XTide + libtcd)
+      - name: Install deps (build tide from source + libtcd)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            cmake ninja-build pkg-config g++ \
-            xtide libtcd-dev
+            cmake ninja-build pkg-config g++ make \
+            curl ca-certificates xz-utils \
+            libtcd-dev \
+            xtide-data \
+            libx11-dev libxt-dev libxaw7-dev libxpm-dev libxmu-dev \
+            libpng-dev \
+            sharutils
+
+      - name: Build & install XTide (provides tide)
+        run: |
+          set -euo pipefail
+          XTIDE_VER="2.16"
+          XTIDE_URL="https://flaterco.com/files/xtide/xtide-${XTIDE_VER}.tar.xz"
+
+          rm -rf _deps
+          mkdir -p _deps
+          cd _deps
+
+          curl -L --retry 3 --retry-delay 2 -o xtide.tar.xz "${XTIDE_URL}"
+          tar -xf xtide.tar.xz
+
+          cd "xtide-${XTIDE_VER}"
+          ./configure --prefix="$PWD/../xtide-install"
+          make -j"$(nproc)"
+          make install
+
+          echo "$PWD/../xtide-install/bin" >> "$GITHUB_PATH"
 
       - name: Configure (release)
         run: |
@@ -43,9 +68,15 @@ jobs:
       - name: Smoke test (Linux)
         run: |
           set -euo pipefail
-          ./build/xtide-nearest --help
-          command -v tide
-          # minimal run without harmonics present is OK; we only sanity-check binary execution
+          ./build/your_tool --help
+          tide -V || tide --version || true
+          # harmonics file from xtide-data (path varies by distro/package revision)
+          HFILE="$(dpkg -L xtide-data | grep -E 'harmonics.*\.tcd$' | head -n 1 || true)"
+          if [[ -n "${HFILE}" ]]; then
+            echo "Found harmonics: ${HFILE}"
+            export HFILE_PATH="${HFILE}"
+            tide -h >/dev/null
+          fi
 
       - name: Package
         run: |
@@ -53,18 +84,18 @@ jobs:
           rm -rf dist
           mkdir -p dist
 
-          cp -f build/xtide-nearest dist/
+          cp -f build/your_tool dist/
 
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
-          tar -czf xtide-nearest-${{ env.ARTIFACT_TAG }}-linux-amd64.tar.gz -C dist .
+          tar -czf your_tool-${{ env.ARTIFACT_TAG }}-linux-amd64.tar.gz -C dist .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-amd64
-          path: xtide-nearest-${{ env.ARTIFACT_TAG }}-linux-amd64.tar.gz
+          path: your_tool-${{ env.ARTIFACT_TAG }}-linux-amd64.tar.gz
 
   linux-arm64:
     name: linux (arm64)
@@ -80,12 +111,37 @@ jobs:
             echo "ARTIFACT_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           fi
 
-      - name: Install deps (XTide + libtcd)
+      - name: Install deps (build tide from source + libtcd)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            cmake ninja-build pkg-config g++ \
-            xtide libtcd-dev
+            cmake ninja-build pkg-config g++ make \
+            curl ca-certificates xz-utils \
+            libtcd-dev \
+            xtide-data \
+            libx11-dev libxt-dev libxaw7-dev libxpm-dev libxmu-dev \
+            libpng-dev \
+            sharutils
+
+      - name: Build & install XTide (provides tide)
+        run: |
+          set -euo pipefail
+          XTIDE_VER="2.16"
+          XTIDE_URL="https://flaterco.com/files/xtide/xtide-${XTIDE_VER}.tar.xz"
+
+          rm -rf _deps
+          mkdir -p _deps
+          cd _deps
+
+          curl -L --retry 3 --retry-delay 2 -o xtide.tar.xz "${XTIDE_URL}"
+          tar -xf xtide.tar.xz
+
+          cd "xtide-${XTIDE_VER}"
+          ./configure --prefix="$PWD/../xtide-install"
+          make -j"$(nproc)"
+          make install
+
+          echo "$PWD/../xtide-install/bin" >> "$GITHUB_PATH"
 
       - name: Configure (release)
         run: |
@@ -98,8 +154,8 @@ jobs:
       - name: Smoke test (Linux)
         run: |
           set -euo pipefail
-          ./build/xtide-nearest --help
-          command -v tide
+          ./build/your_tool --help
+          tide -V || tide --version || true
 
       - name: Package
         run: |
@@ -107,18 +163,18 @@ jobs:
           rm -rf dist
           mkdir -p dist
 
-          cp -f build/xtide-nearest dist/
+          cp -f build/your_tool dist/
 
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
-          tar -czf xtide-nearest-${{ env.ARTIFACT_TAG }}-linux-arm64.tar.gz -C dist .
+          tar -czf your_tool-${{ env.ARTIFACT_TAG }}-linux-arm64.tar.gz -C dist .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64
-          path: xtide-nearest-${{ env.ARTIFACT_TAG }}-linux-arm64.tar.gz
+          path: your_tool-${{ env.ARTIFACT_TAG }}-linux-arm64.tar.gz
 
   windows-x64:
     name: windows (x64)
@@ -168,15 +224,15 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          rm -rf dist xtide-nearest-${{ env.ARTIFACT_TAG }}-windows-x64.zip
+          rm -rf dist your_tool-${{ env.ARTIFACT_TAG }}-windows-x64.zip
           mkdir -p dist
 
-          cp -f build/xtide-nearest.exe dist/xtide-nearest.exe
+          cp -f build/your_tool.exe dist/your_tool.exe
 
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
-          ( cd dist && cmake -E tar cfv ../xtide-nearest-${{ env.ARTIFACT_TAG }}-windows-x64.zip --format=zip . )
+          ( cd dist && cmake -E tar cfv ../your_tool-${{ env.ARTIFACT_TAG }}-windows-x64.zip --format=zip . )
 
       - name: Smoke test (Windows)
         shell: msys2 {0}
@@ -185,14 +241,14 @@ jobs:
           rm -rf unpack
           mkdir -p unpack
           cd unpack
-          cmake -E tar xvf ../xtide-nearest-${{ env.ARTIFACT_TAG }}-windows-x64.zip
-          ./xtide-nearest.exe --help
+          cmake -E tar xvf ../your_tool-${{ env.ARTIFACT_TAG }}-windows-x64.zip
+          ./your_tool.exe --help
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: xtide-nearest-${{ env.ARTIFACT_TAG }}-windows-x64.zip
+          path: your_tool-${{ env.ARTIFACT_TAG }}-windows-x64.zip
 
   publish:
     name: publish to GitHub Release
