@@ -4,7 +4,7 @@ Find the nearest XTide station (tide and/or current) to a GPS point and emit pre
 
 This tool:
 - Reads one or more XTide harmonics `.tcd` databases via **libtcd**
-- Finds nearest **tide** station (height) and/or nearest **current** station (speed+direction)
+- Finds the nearest **tide** station (height) and/or nearest **current** station (speed+direction)
 - Runs XTide's `tide` command in **raw CSV** mode to generate time series
 
 ## Requirements
