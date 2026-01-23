@@ -30,33 +30,33 @@ cmake --build build -j
 
 ```bash
 ./build/xtide-nearest \
-  --lat 47.60 --lon -122.33 \
+  --lat 40.7000 --lon -74.0120 \
   --tcd /usr/share/xtide/harmonics.tcd \
   --start "2026-01-22 00:00" --end "2026-01-23 00:00" \
   --step "00:10" \
-  --product both > out.csv
+  --product both 
 ```
 
 ### Currents only
 
 ```bash
 ./build/xtide-nearest \
-  --lat 47.60 --lon -122.33 \
+  --lat 40.7000 --lon -74.0120 \
   --tcd /usr/share/xtide/harmonics.tcd \
   --start "2026-01-22 00:00" --end "2026-01-22 12:00" \
   --step "00:05" \
-  --product current > current.csv
+  --product current 
 ```
 
 ### Tide only (force meters)
 
 ```bash
 ./build/xtide-nearest \
-  --lat 47.60 --lon -122.33 \
+  --lat 40.7000 --lon -74.0120 \
   --tcd /usr/share/xtide/harmonics.tcd \
   --start "2026-01-22 00:00" --end "2026-01-23 00:00" \
   --step "00:10" \
-  --product tide --tide-units m > tide.csv
+  --product tide --tide-units m 
 ```
 
 ## Output
