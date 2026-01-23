@@ -101,3 +101,42 @@ The Battery| New York Harbor| New York,1769060400,2.620230
 The Battery| New York Harbor| New York,1769061000,2.434448
 ...
 ```
+
+## Cached lookup of Stations
+
+In xtide-nearest/nearest.cache
+
+- Linux: ~/.cache/xtide-nearest/nearest.cache (or $XDG_CACHE_HOME/...)
+- Windows: %LOCALAPPDATA%\xtide-nearest\nearest.cache
+
+```
+# xtide-nearest cache (key=value, percent-encoded)
+current_lat=40.697899999999997
+current_lon=-74.021299999999997
+current_max_dir=10
+current_min_dir=137
+current_name=Dimond Reef (depth 11 ft), Upper Bay, New York Harbor, New York Current
+current_tcd=C:\Users\17326\Downloads\windows-x64(15)\xtide-nearest-sha-f14439a-windows-x64\harmonics-dwf-20251228\harmonics-dwf-20251228-free.tcd
+current_units=knots
+epoch_s=1769195326
+fingerprint=84c8bb69110bf5d7
+has_current=1
+has_tide=1
+lat=40.700000000000003
+lon=-74.012
+tide_lat=40.70055
+tide_lon=-74.014169999999993
+tide_max_dir=361
+tide_min_dir=361
+tide_name=The Battery, New York Harbor, New York
+tide_tcd=C:\Users\17326\Downloads\windows-x64(15)\xtide-nearest-sha-f14439a-windows-x64\harmonics-dwf-20251228\harmonics-dwf-20251228-free.tcd
+tide_units=feet
+version=1
+```
+
+## Optional config
+
+- Linux: ~/.config/xtide-nearest/tcd.conf (or $XDG_CONFIG_HOME/xtide-nearest/tcd.conf)
+- Windows: %APPDATA%\xtide-nearest\tcd.conf
+
+
