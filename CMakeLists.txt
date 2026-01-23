@@ -8,8 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(XTN_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 
-# --- deps (CLI11 via CPM) ---
-include(cmake/CPM.cmake)
+# ---- deps: CLI11 via CPM ----
+include("${CMAKE_CURRENT_LIST_DIR}/third_party/CPM.cmake")
 
 CPMAddPackage(
   NAME CLI11
@@ -21,8 +21,8 @@ CPMAddPackage(
     "CLI11_BUILD_DOCS OFF"
 )
 
-# --- libtcd (FindTCD.cmake) ---
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+# ---- libtcd ----
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 find_package(TCD REQUIRED)
 
 add_executable(xtide-nearest
@@ -30,8 +30,6 @@ add_executable(xtide-nearest
 )
 
 target_link_libraries(xtide-nearest PRIVATE CLI11::CLI11 TCD::tcd)
-
-target_compile_features(xtide-nearest PRIVATE cxx_std_20)
 
 if (MSVC)
   target_compile_options(xtide-nearest PRIVATE /W4)
@@ -44,5 +42,3 @@ else()
     target_compile_options(xtide-nearest PRIVATE -Werror)
   endif()
 endif()
-
-install(TARGETS xtide-nearest RUNTIME DESTINATION bin)
