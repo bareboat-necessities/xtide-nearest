@@ -26,6 +26,15 @@ extern "C" {
 #include <tcd.h>
 }
 
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -130,16 +139,14 @@ void unsetenv_portable(const std::string& key) {
 #endif
 }
 
-#ifdef _WIN32
-FILE* popen_portable(const char* cmd, const char* mode) { return _popen(cmd, mode); }
-int pclose_portable(FILE* f) { return _pclose(f); }
-#else
+#ifndef _WIN32
 FILE* popen_portable(const char* cmd, const char* mode) { return popen(cmd, mode); }
 int pclose_portable(FILE* f) { return pclose(f); }
 #endif
 
 std::string shell_quote_double(std::string s) {
   // Wrap in "..." and escape backslashes and quotes.
+  // (Good enough for POSIX /bin/sh -c via popen(). Not used on Windows.)
   std::string out;
   out.reserve(s.size() + 2);
   out.push_back('"');
@@ -221,19 +228,194 @@ std::vector<Candidate> nearest(const std::vector<Station>& stations,
   return out;
 }
 
+// XTide expects HFILE_PATH to be a path list of *directories* that contain .tcd files.
+// Do NOT pass the .tcd file paths themselves.
 std::string join_hfile_path(const std::vector<fs::path>& tcd_files) {
 #ifdef _WIN32
   const char sep = ';';
 #else
   const char sep = ':';
 #endif
+
+  std::vector<std::string> dirs;
+  dirs.reserve(tcd_files.size());
+
+  auto norm_dir = [&](fs::path p) -> fs::path {
+    // If user passed a .tcd file, use its parent directory.
+    if (p.has_extension() && to_lower_copy(p.extension().string()) == ".tcd") {
+      p = p.parent_path();
+    }
+    if (p.empty()) p = fs::path(".");
+    // Make absolute so child process can find it regardless of cwd changes.
+    std::error_code ec;
+    fs::path abs = fs::absolute(p, ec);
+    if (ec) abs = p;
+    abs = abs.lexically_normal();
+#ifdef _WIN32
+    abs.make_preferred();
+#endif
+    return abs;
+  };
+
+  for (const auto& p : tcd_files) {
+    fs::path d = norm_dir(p);
+    std::string ds = d.string();
+    if (std::find(dirs.begin(), dirs.end(), ds) == dirs.end()) dirs.push_back(std::move(ds));
+  }
+
   std::ostringstream oss;
-  for (size_t i = 0; i < tcd_files.size(); ++i) {
+  for (size_t i = 0; i < dirs.size(); ++i) {
     if (i) oss << sep;
-    oss << tcd_files[i].string();
+    oss << dirs[i];
   }
   return oss.str();
 }
+
+#ifdef _WIN32
+
+// UTF-8 -> UTF-16
+std::wstring widen_utf8(const std::string& s) {
+  if (s.empty()) return {};
+  int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+  if (n <= 0) throw std::runtime_error("MultiByteToWideChar failed");
+  std::wstring w(static_cast<size_t>(n), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+  return w;
+}
+
+std::string win_errstr(DWORD err) {
+  LPWSTR buf = nullptr;
+  DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+  DWORD n = FormatMessageW(flags, nullptr, err, 0, (LPWSTR)&buf, 0, nullptr);
+  std::string out;
+  if (n && buf) {
+    // Convert UTF-16 to UTF-8
+    int m = WideCharToMultiByte(CP_UTF8, 0, buf, -1, nullptr, 0, nullptr, nullptr);
+    if (m > 0) {
+      out.resize(static_cast<size_t>(m - 1));
+      WideCharToMultiByte(CP_UTF8, 0, buf, -1, out.data(), m, nullptr, nullptr);
+    }
+  }
+  if (buf) LocalFree(buf);
+  if (out.empty()) out = "Windows error " + std::to_string(err);
+  return trim_copy(out);
+}
+
+// Quote argv element for Windows CreateProcess command-line parsing rules.
+std::wstring quote_arg_win(std::wstring_view s) {
+  const bool need_quotes =
+      s.empty() || s.find_first_of(L" \t\n\v\"") != std::wstring_view::npos;
+  if (!need_quotes) return std::wstring(s);
+
+  std::wstring out;
+  out.push_back(L'"');
+
+  size_t backslashes = 0;
+  for (wchar_t ch : s) {
+    if (ch == L'\\') { ++backslashes; continue; }
+    if (ch == L'"') {
+      out.append(backslashes * 2 + 1, L'\\');
+      out.push_back(L'"');
+      backslashes = 0;
+      continue;
+    }
+    if (backslashes) out.append(backslashes, L'\\');
+    backslashes = 0;
+    out.push_back(ch);
+  }
+  if (backslashes) out.append(backslashes * 2, L'\\');
+  out.push_back(L'"');
+  return out;
+}
+
+std::wstring build_cmdline_win(const std::wstring& exe, const std::vector<std::wstring>& args) {
+  std::wstring cmd = quote_arg_win(exe);
+  for (const auto& a : args) {
+    cmd.push_back(L' ');
+    cmd += quote_arg_win(a);
+  }
+  return cmd;
+}
+
+// Run tide.exe without cmd.exe parsing (no popen/system). Stream stdout to this process stdout.
+int run_tide_win_stream(const std::string& tide_bin_utf8,
+                        const std::vector<std::wstring>& args_w,
+                        const std::string& debug_cmd_utf8) {
+  SECURITY_ATTRIBUTES sa{};
+  sa.nLength = sizeof(sa);
+  sa.bInheritHandle = TRUE;
+
+  HANDLE childStdoutRead = nullptr;
+  HANDLE childStdoutWrite = nullptr;
+  if (!CreatePipe(&childStdoutRead, &childStdoutWrite, &sa, 0)) {
+    std::cerr << "ERROR: CreatePipe failed: " << win_errstr(GetLastError()) << "\n";
+    std::cerr << "CMD: " << debug_cmd_utf8 << "\n";
+    return 2;
+  }
+  SetHandleInformation(childStdoutRead, HANDLE_FLAG_INHERIT, 0);
+
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  si.hStdOutput = childStdoutWrite;
+  si.hStdError = GetStdHandle(STD_ERROR_HANDLE); // keep disclaimers/warnings on stderr
+
+  PROCESS_INFORMATION pi{};
+
+  std::wstring exe_w = widen_utf8(tide_bin_utf8);
+  std::wstring cmdline = build_cmdline_win(exe_w, args_w);
+  std::vector<wchar_t> cmdBuf(cmdline.begin(), cmdline.end());
+  cmdBuf.push_back(L'\0');
+
+  // lpApplicationName = nullptr enables PATH lookup if tide_bin is "tide" / "tide.exe"
+  BOOL ok = CreateProcessW(
+      nullptr,
+      cmdBuf.data(),
+      nullptr,
+      nullptr,
+      TRUE,
+      CREATE_NO_WINDOW,
+      nullptr,
+      nullptr,
+      &si,
+      &pi);
+
+  CloseHandle(childStdoutWrite);
+
+  if (!ok) {
+    DWORD e = GetLastError();
+    CloseHandle(childStdoutRead);
+    std::cerr << "ERROR: CreateProcessW failed: " << win_errstr(e) << "\n";
+    std::cerr << "CMD: " << debug_cmd_utf8 << "\n";
+    return 2;
+  }
+
+  // Read child stdout and stream to our stdout.
+  std::array<char, 8192> buf{};
+  DWORD nread = 0;
+  while (ReadFile(childStdoutRead, buf.data(), static_cast<DWORD>(buf.size()), &nread, nullptr) && nread > 0) {
+    std::fwrite(buf.data(), 1, static_cast<size_t>(nread), stdout);
+    std::fflush(stdout);
+  }
+  CloseHandle(childStdoutRead);
+
+  WaitForSingleObject(pi.hProcess, INFINITE);
+
+  DWORD exit_code = 0;
+  GetExitCodeProcess(pi.hProcess, &exit_code);
+
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+
+  if (exit_code != 0) {
+    std::cerr << "WARNING: tide exited with code " << static_cast<int>(exit_code) << "\n"
+              << "CMD: " << debug_cmd_utf8 << "\n";
+  }
+  return (exit_code == 0) ? 0 : 3;
+}
+
+#endif // _WIN32
 
 int run_tide_and_stream(const std::string& tide_bin,
                         const std::vector<fs::path>& tcd_files,
@@ -242,7 +424,7 @@ int run_tide_and_stream(const std::string& tide_bin,
                         const std::string& end,
                         const std::string& step_hhmm,
                         bool utc,
-                        bool suppress_sunmoon,
+                        bool include_sunmoon,   // NOTE: renamed semantics
                         bool omit_units,
                         bool emit_metadata,
                         double dist_km,
@@ -250,6 +432,54 @@ int run_tide_and_stream(const std::string& tide_bin,
   const auto old_hfile = getenv_str("HFILE_PATH");
   setenv_portable("HFILE_PATH", join_hfile_path(tcd_files));
 
+#ifdef _WIN32
+  // Build argv for tide.exe as discrete args (no shell).
+  std::vector<std::wstring> args_w;
+  args_w.emplace_back(L"-l");  args_w.emplace_back(widen_utf8(station_name));
+  args_w.emplace_back(L"-b");  args_w.emplace_back(widen_utf8(begin));
+  args_w.emplace_back(L"-e");  args_w.emplace_back(widen_utf8(end));
+  args_w.emplace_back(L"-m");  args_w.emplace_back(L"r");
+  args_w.emplace_back(L"-f");  args_w.emplace_back(L"c");
+  args_w.emplace_back(L"-s");  args_w.emplace_back(widen_utf8(step_hhmm));
+  args_w.emplace_back(L"-z");  args_w.emplace_back(utc ? L"y" : L"n");
+
+  // If we do NOT want sun/moon, suppress them.
+  if (!include_sunmoon) { args_w.emplace_back(L"-em"); args_w.emplace_back(L"pSsMm"); }
+  if (omit_units) { args_w.emplace_back(L"-ou"); args_w.emplace_back(L"y"); }
+
+  // Debug string (for stderr on failure)
+  std::ostringstream dbg;
+  dbg << shell_quote_double(tide_bin)
+      << " -l " << shell_quote_double(station_name)
+      << " -b " << shell_quote_double(begin)
+      << " -e " << shell_quote_double(end)
+      << " -m r -f c"
+      << " -s " << shell_quote_double(step_hhmm)
+      << " -z " << (utc ? "y" : "n");
+  if (!include_sunmoon) dbg << " -em pSsMm";
+  if (omit_units) dbg << " -ou y";
+  const std::string cmd_str = dbg.str();
+
+  if (emit_metadata) {
+    std::cout << "# kind=" << kind_str(kind)
+              << " station=" << station_name
+              << " distance_km=" << std::fixed << std::setprecision(3) << dist_km
+              << " begin=" << begin
+              << " end=" << end
+              << " step=" << step_hhmm
+              << " utc=" << (utc ? "true" : "false")
+              << "\n";
+  }
+
+  const int rc = run_tide_win_stream(tide_bin, args_w, cmd_str);
+
+  if (old_hfile) setenv_portable("HFILE_PATH", *old_hfile);
+  else unsetenv_portable("HFILE_PATH");
+
+  return rc;
+
+#else
+  // POSIX: use popen() and shell quoting.
   std::ostringstream cmd;
   cmd << shell_quote_double(tide_bin)
       << " -l " << shell_quote_double(station_name)
@@ -259,7 +489,7 @@ int run_tide_and_stream(const std::string& tide_bin,
       << " -s " << shell_quote_double(step_hhmm)
       << " -z " << (utc ? "y" : "n");
 
-  if (suppress_sunmoon) cmd << " -em pSsMm";
+  if (!include_sunmoon) cmd << " -em pSsMm";
   if (omit_units) cmd << " -ou y";
 
   const std::string cmd_str = cmd.str();
@@ -288,16 +518,20 @@ int run_tide_and_stream(const std::string& tide_bin,
     std::cout << buf.data();
   }
 
-  const int rc = pclose_portable(pipe);
+  const int status = pclose_portable(pipe);
+
+  int exit_code = status;
+  if (WIFEXITED(status)) exit_code = WEXITSTATUS(status);
 
   if (old_hfile) setenv_portable("HFILE_PATH", *old_hfile);
   else unsetenv_portable("HFILE_PATH");
 
-  if (rc != 0) {
-    std::cerr << "WARNING: tide exited with code " << rc << "\n"
+  if (exit_code != 0) {
+    std::cerr << "WARNING: tide exited with code " << exit_code << "\n"
               << "CMD: " << cmd_str << "\n";
   }
-  return (rc == 0) ? 0 : 3;
+  return (exit_code == 0) ? 0 : 3;
+#endif
 }
 
 } // namespace
@@ -329,7 +563,7 @@ int main(int argc, char** argv) {
   std::string step = "00:10";
   std::string tide_bin = "tide";
   bool utc = false;
-  bool suppress_sunmoon = true;
+  bool include_sunmoon = false;   // default: suppressed (clean CSV)
   bool omit_units = false;
   bool emit_metadata = true;
 
@@ -339,9 +573,10 @@ int main(int argc, char** argv) {
   cmd_predict->add_option("--step", step, "Step interval for raw mode: \"HH:MM\"")->default_val("00:10");
   cmd_predict->add_option("--tide-bin", tide_bin, "Path to tide(1) executable")->default_val("tide");
   cmd_predict->add_flag("--utc", utc, "Coerce timestamps to UTC (tide -z y)");
-  cmd_predict->add_flag("--no-sunmoon", suppress_sunmoon, "Suppress sun/moon events (default on)")->default_val(true);
+  cmd_predict->add_flag("--sunmoon,!--no-sunmoon", include_sunmoon,
+                        "Include sun/moon events (default: suppressed for clean CSV)")->default_val(false);
   cmd_predict->add_flag("--omit-units", omit_units, "Omit unit suffix in numeric fields (tide -ou y)");
-  cmd_predict->add_flag("--no-meta", emit_metadata, "Disable metadata header line")->default_val(true);
+  cmd_predict->add_flag("--meta,!--no-meta", emit_metadata, "Emit metadata header line (default on)")->default_val(true);
 
   CLI11_PARSE(app, argc, argv);
 
@@ -405,7 +640,7 @@ int main(int argc, char** argv) {
       end,
       step,
       utc,
-      suppress_sunmoon,
+      include_sunmoon,
       omit_units,
       emit_metadata,
       best.distance_km,
