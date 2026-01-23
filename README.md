@@ -26,6 +26,15 @@ cmake --build build -j
 
 ## Usage
 
+### Getting tides and currents files 
+
+Example
+
+```bash
+wget https://flaterco.com/files/xtide/harmonics-dwf-20251228-free.tar.xz
+xz -cd harmonics-dwf-20251228-free.tar.xz | tar xvf -
+```
+
 ### Nearest TIDE station
 
 ```bash
