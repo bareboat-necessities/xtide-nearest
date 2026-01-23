@@ -274,13 +274,19 @@ jobs:
           mkdir -p _deps/harmonics
           cd _deps/harmonics
           curl -L --retry 3 --retry-delay 2 -o harmonics.tar.xz "${HARMONICS_URL}"
-          tar -xf harmonics.tar.xz
+
+          # The archive contains symlinks that MSYS2 tar may fail to create.
+          # We only need the .tcd file(s), so ignore tar's symlink errors and verify .tcd exists.
+          tar -xf harmonics.tar.xz || true
+
           TCD_FILE="$(find . -type f -name '*.tcd' | head -n1)"
           if [ -z "${TCD_FILE}" ]; then
             echo "ERROR: No .tcd found after extracting harmonics archive"
-            find . -maxdepth 3 -type f | head -n 50 || true
+            echo "Listing extracted files:"
+            find . -maxdepth 4 -type f | head -n 200 || true
             exit 1
           fi
+
           echo "HARM_TCD=$PWD/${TCD_FILE#./}" >> "$GITHUB_ENV"
           echo "Using HARM_TCD=$PWD/${TCD_FILE#./}"
 
