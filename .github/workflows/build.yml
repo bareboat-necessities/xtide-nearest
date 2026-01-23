@@ -355,7 +355,7 @@ jobs:
           # Hard assertion: must produce rows
           test "$(wc -l < out.csv)" -ge 5
 
-      - name: Package zip 
+      - name: Package zip
         shell: msys2 {0}
         run: |
           set -euo pipefail

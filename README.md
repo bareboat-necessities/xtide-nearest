@@ -50,9 +50,11 @@ cmake --build build -j
 ./xtide-nearest \
   --lat 40.7000 --lon -74.0120 \
   --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd" \
-  --start "2026-01-22 00:00" --end "2026-01-23 00:00" \
-  --step "00:10" \
-  --product both 
+  predict --kind both \
+  --begin "2026-01-22 00:00" \
+  --end   "2026-01-23 00:00" \
+  --step  "00:10" \
+  --format c --mode r
 ```
 
 ### Currents only
@@ -61,20 +63,24 @@ cmake --build build -j
 ./xtide-nearest \
   --lat 40.7000 --lon -74.0120 \
   --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd" \
-  --start "2026-01-22 00:00" --end "2026-01-22 12:00" \
-  --step "00:05" \
-  --product current 
+  predict --kind current \
+  --begin "2026-01-22 00:00" \
+  --end   "2026-01-23 00:00" \
+  --step  "00:10" \
+  --format c --mode r
 ```
 
-### Tide only (force meters)
+### Tide only 
 
 ```bash
 ./xtide-nearest \
   --lat 40.7000 --lon -74.0120 \
   --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd" \
-  --start "2026-01-22 00:00" --end "2026-01-23 00:00" \
-  --step "00:10" \
-  --product tide --tide-units m 
+  predict --kind tide \
+  --begin "2026-01-22 00:00" \
+  --end   "2026-01-23 00:00" \
+  --step  "00:10" \
+  --format c --mode r
 ```
 
 ## Output
