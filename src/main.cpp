@@ -1,6 +1,6 @@
 #include <CLI/CLI.hpp>
 
-#include <tide_db.h>   // libtcd (XTide)
+#include <tcd.h>  // libtcd (XTide)
 
 #include <algorithm>
 #include <array>
