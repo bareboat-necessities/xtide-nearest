@@ -26,12 +26,30 @@ cmake --build build -j
 
 ## Usage
 
+### Nearest TIDE station
+
+```bash
+./xtide-nearest \
+  --lat 40.7000 --lon -74.0120 \
+  --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd" \
+  nearest --no-current --top 1
+```
+
+### Nearest CURRENT station
+
+```bash
+./xtide-nearest \
+  --lat 40.7000 --lon -74.0120 \
+  --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd" \
+  nearest --no-tide --top 1
+```
+
 ### Both tide + current
 
 ```bash
-./build/xtide-nearest \
+./xtide-nearest \
   --lat 40.7000 --lon -74.0120 \
-  --tcd /usr/share/xtide/harmonics.tcd \
+  --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd" \
   --start "2026-01-22 00:00" --end "2026-01-23 00:00" \
   --step "00:10" \
   --product both 
@@ -40,9 +58,9 @@ cmake --build build -j
 ### Currents only
 
 ```bash
-./build/xtide-nearest \
+./xtide-nearest \
   --lat 40.7000 --lon -74.0120 \
-  --tcd /usr/share/xtide/harmonics.tcd \
+  --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd" \
   --start "2026-01-22 00:00" --end "2026-01-22 12:00" \
   --step "00:05" \
   --product current 
@@ -51,9 +69,9 @@ cmake --build build -j
 ### Tide only (force meters)
 
 ```bash
-./build/xtide-nearest \
+./xtide-nearest \
   --lat 40.7000 --lon -74.0120 \
-  --tcd /usr/share/xtide/harmonics.tcd \
+  --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd" \
   --start "2026-01-22 00:00" --end "2026-01-23 00:00" \
   --step "00:10" \
   --product tide --tide-units m 
