@@ -329,23 +329,31 @@ jobs:
           ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
             nearest --no-tide --top 1
 
-          # Ensure tide.exe can find the downloaded harmonics DB
-          HFILE_DIR_WIN="$(cygpath -w "$(dirname "${{ env.HARM_TCD }}")")"
-          export HFILE_PATH="$HFILE_DIR_WIN"
+          # Now test predictions by invoking tide.exe directly (avoid cmd/system() quoting issues inside xtide-nearest).
+          echo ""
+          echo "=== tide.exe version ==="
+          "${{ env.TIDE_EXE }}" --version || true
+
+          # Ensure tide.exe can find the harmonics database.
+          export HFILE_PATH="$(dirname "${{ env.HARM_TCD }}")"
           echo "HFILE_PATH=$HFILE_PATH"
 
+          # Use a known current station name (matches your earlier log)
+          STATION='Dimond Reef (depth 11 ft), Upper Bay, New York Harbor, New York Current'
+
           echo ""
-          echo "=== Predict CURRENT (CSV, first lines) ==="
-          ./build/xtide-nearest.exe --lat "${LAT}" --lon "${LON}" --tcd "${{ env.HARM_TCD }}" \
-            predict --kind current \
-            --begin "2026-01-22 00:00" \
-            --end   "2026-01-22 06:00" \
-            --step  "00:30" \
-            --tide-bin "${{ env.TIDE_EXE_WIN }}" \
+          echo "=== Predict CURRENT via tide.exe (CSV, head) ==="
+          "${{ env.TIDE_EXE }}" -l "$STATION" \
+            -b "2026-01-22 00:00" \
+            -e "2026-01-22 06:00" \
+            -m r -f c -s "00:30" -z n -em pSsMm \
             > out.csv
 
           echo "--- out.csv (head) ---"
-          sed -n '1,12p' out.csv || true
+          sed -n '1,12p' out.csv
+
+          # Hard assertion: CSV should have at least a header + a few rows.
+          test "$(wc -l < out.csv)" -ge 5
 
       - name: Package zip (includes tide.exe)
         shell: msys2 {0}
