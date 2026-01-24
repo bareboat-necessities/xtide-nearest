@@ -151,8 +151,11 @@ jobs:
             exit 1
           fi
 
-          # Make the binary find the bundled libtcd via RPATH, no LD_LIBRARY_PATH needed
-          patchelf --set-rpath '$ORIGIN/../lib' "$STAGE${INSTALL_ROOT}/xtide-nearest"
+          # Correct RPATH for this layout:
+          #   binary:  .../usr/lib/xtide-nearest/xtide-nearest
+          #   libs:    .../usr/lib/xtide-nearest/lib/libtcd.so.1
+          # => $ORIGIN/lib
+          patchelf --set-rpath '$ORIGIN/lib' "$STAGE${INSTALL_ROOT}/xtide-nearest"
 
           # /usr/bin wrapper
           cat > "$STAGE/usr/bin/$PKG" <<'EOF'
@@ -184,8 +187,12 @@ jobs:
            Find nearest tide/current station from an XTide harmonics database.
           EOF
 
-          # Compute Depends from the staged binary, preferring staged libs (-S) so libtcd is treated as in-package
-          DEPENDS="$(dpkg-shlibdeps --ignore-missing-info -O -p"$PKG" -S"$STAGE" \
+          # Compute Depends from the staged binary.
+          # -l points dpkg-shlibdeps at the private in-package lib dir so libtcd is treated as "provided"
+          # System libs (libstdc++6, libgcc-s1, libc6, etc.) stay as Depends.
+          DEPENDS="$(dpkg-shlibdeps --ignore-missing-info -O -p"$PKG" \
+            -l"$STAGE${INSTALL_ROOT}/lib" \
+            -S"$STAGE" \
             -e "$STAGE${INSTALL_ROOT}/xtide-nearest" | sed -n 's/^shlibs:Depends=//p')"
           [ -n "$DEPENDS" ] || DEPENDS="libc6"
 
