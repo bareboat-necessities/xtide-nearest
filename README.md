@@ -102,6 +102,13 @@ The Battery| New York Harbor| New York,1769061000,2.434448
 ...
 ```
 
+JSON Output:
+
+```
+$ ./xtide-nearest   --lat 40.7000 --lon -74.0120 --json  --tcd "harmonics-dwf-20251228/harmonics-dwf-20251228-free.tcd"   predict --kind current   --begin "2026-01-22 00:00"   --end   "2026-01-22 00:30"   --step  "00:10"
+{"ok":true,"command":"predict","lat":40.700000000000003,"lon":-74.012,"kind":"current","fingerprint":"2aaadfd3607231e3","cache":{"enabled":true,"path":"C:\\Users\\17326\\AppData\\Local\\xtide-nearest\\nearest.cache","loaded":true,"hit":true},"station":{"name":"Dimond Reef (depth 11 ft), Upper Bay, New York Harbor, New York Current","lat_deg":40.697899999999997,"lon_deg":-74.021299999999997,"kind":"current","units":"knots","min_dir_deg":137,"max_dir_deg":10,"tcd_path":"C:\\Users\\17326\\Downloads\\windows-x64(16)\\xtide-nearest-sha-5f43094-windows-x64\\harmonics-dwf-20251228\\harmonics-dwf-20251228-free.tcd"},"distance_km":0.818045,"tide":{"bin":"tide","begin":"2026-01-22 00:00","end":"2026-01-22 00:30","step":"00:10","mode":"r","format":"c","utc":false,"include_sunmoon":false,"omit_units":false},"runner_rc":0,"output":{"format":"tide_stdout","text":"Dimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769058000,0.445081\r\nDimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769058600,0.379907\r\nDimond Reef (depth 11 ft)| Upper Bay| New York Harbor| New York Current,1769059200,0.328561\r\n"}}
+```
+
 ## Cached lookup of Stations
 
 In xtide-nearest/nearest.cache
