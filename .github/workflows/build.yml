@@ -17,15 +17,15 @@ env:
 
 jobs:
   linux:
-    name: linux (${{ matrix.name }})
+    name: linux (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: amd64
+          - arch: amd64
             runs_on: ubuntu-latest
             tar_suffix: linux-amd64
-          - name: arm64
+          - arch: arm64
             runs_on: ubuntu-24.04-arm
             tar_suffix: linux-arm64
     runs-on: ${{ matrix.runs_on }}
@@ -34,6 +34,7 @@ jobs:
 
       - name: Compute artifact tag + deb version
         run: |
+          set -euo pipefail
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "ARTIFACT_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
             echo "DEB_VERSION=${GITHUB_REF_NAME#v}-1" >> "$GITHUB_ENV"
@@ -43,13 +44,13 @@ jobs:
           fi
           echo "DEB_ARCH=$(dpkg --print-architecture)" >> "$GITHUB_ENV"
 
-      - name: Install deps (build + deb tools)
+      - name: Install deps
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             cmake ninja-build pkg-config g++ \
             curl tar xz-utils make \
-            dpkg-dev fakeroot apt-utils
+            dpkg-dev fakeroot apt-utils patchelf
 
       - name: Build + install libtcd (prefix)
         run: |
@@ -92,14 +93,14 @@ jobs:
           echo "HARM_TCD=$PWD/${TCD_FILE#./}" >> "$GITHUB_ENV"
           echo "Using HARM_TCD=$PWD/${TCD_FILE#./}"
 
-      - name: Smoke test (Linux, real data + log output)
+      - name: Smoke test (Linux)
         run: |
           set -euo pipefail
-          echo "=== xtide-nearest --help ==="
-          ./build/xtide-nearest --help | head -n 60 || true
-
           LAT="40.7050"
           LON="-74.0120"
+
+          echo "=== xtide-nearest --help ==="
+          ./build/xtide-nearest --help | head -n 60 || true
 
           echo ""
           echo "=== Nearest TIDE station (lat=${LAT}, lon=${LON}) ==="
@@ -121,15 +122,15 @@ jobs:
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
           tar -czf xtide-nearest-${{ env.ARTIFACT_TAG }}-${{ matrix.tar_suffix }}.tar.gz -C dist .
 
-      - name: Package (Debian .deb, bundle private libtcd)
+      - name: Package (Debian .deb, bundles libtcd privately)
         run: |
           set -euo pipefail
 
           PKG="xtide-nearest"
-          STAGE="pkgroot"
           INSTALL_ROOT="/usr/lib/${PKG}"
-          rm -rf "$STAGE" debian
+          STAGE="debian/${PKG}"
 
+          rm -rf debian
           install -d \
             "$STAGE/DEBIAN" \
             "$STAGE/usr/bin" \
@@ -140,8 +141,7 @@ jobs:
           install -m 0755 build/xtide-nearest "$STAGE${INSTALL_ROOT}/xtide-nearest"
 
           # Bundle libtcd into private prefix (no global /usr/lib install => no conflicts)
-          # Prefer SONAME symlink + real file.
-          if [ -f "${{ env.TCD_PREFIX }}/lib/libtcd.so.1" ]; then
+          if [ -e "${{ env.TCD_PREFIX }}/lib/libtcd.so.1" ]; then
             cp -a "${{ env.TCD_PREFIX }}/lib/libtcd.so.1"* "$STAGE${INSTALL_ROOT}/lib/"
           elif ls "${{ env.TCD_PREFIX }}/lib/libtcd.so"* >/dev/null 2>&1; then
             cp -a "${{ env.TCD_PREFIX }}/lib/libtcd.so"* "$STAGE${INSTALL_ROOT}/lib/"
@@ -151,12 +151,14 @@ jobs:
             exit 1
           fi
 
-          # Wrapper in /usr/bin that sets rpath via LD_LIBRARY_PATH to the private lib dir
+          # Make the binary find the bundled libtcd via RPATH, no LD_LIBRARY_PATH needed
+          patchelf --set-rpath '$ORIGIN/../lib' "$STAGE${INSTALL_ROOT}/xtide-nearest"
+
+          # /usr/bin wrapper
           cat > "$STAGE/usr/bin/$PKG" <<'EOF'
           #!/bin/sh
           set -e
           : "${XTIDE_NEAREST_HOME:=/usr/lib/xtide-nearest}"
-          export LD_LIBRARY_PATH="$XTIDE_NEAREST_HOME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           exec "$XTIDE_NEAREST_HOME/xtide-nearest" "$@"
           EOF
           chmod 0755 "$STAGE/usr/bin/$PKG"
@@ -165,12 +167,9 @@ jobs:
           [ -f README.md ] && install -m 0644 README.md "$STAGE/usr/share/doc/$PKG/README.md" || true
           [ -f LICENSE ] && install -m 0644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright" || true
 
-          # Size for control
           SIZE_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
 
-          # Make dpkg-shlibdeps happy without polluting packaging:
-          # create a minimal debian/control with substvars placeholders.
-          mkdir -p debian
+          # Minimal debian/control so dpkg-shlibdeps can compute system Depends
           cat > debian/control <<EOF
           Source: $PKG
           Section: utils
@@ -185,13 +184,12 @@ jobs:
            Find nearest tide/current station from an XTide harmonics database.
           EOF
 
-          # Compute deps for the main binary only (system libs like libstdc++/libgcc_s stay as Depends)
-          DEPENDS="$(dpkg-shlibdeps -O -p"$PKG" -e "$STAGE${INSTALL_ROOT}/xtide-nearest" \
-            | sed -n 's/^shlibs:Depends=//p')"
+          # Compute Depends from the staged binary, preferring staged libs (-S) so libtcd is treated as in-package
+          DEPENDS="$(dpkg-shlibdeps --ignore-missing-info -O -p"$PKG" -S"$STAGE" \
+            -e "$STAGE${INSTALL_ROOT}/xtide-nearest" | sed -n 's/^shlibs:Depends=//p')"
           [ -n "$DEPENDS" ] || DEPENDS="libc6"
 
-          rm -rf debian
-
+          # Final binary package control
           cat > "$STAGE/DEBIAN/control" <<EOF
           Package: $PKG
           Version: ${DEB_VERSION}
@@ -211,7 +209,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-${{ matrix.name }}
+          name: linux-${{ matrix.arch }}
           path: |
             xtide-nearest-${{ env.ARTIFACT_TAG }}-${{ matrix.tar_suffix }}.tar.gz
             xtide-nearest_${{ env.DEB_VERSION }}_${{ env.DEB_ARCH }}.deb
@@ -283,17 +281,13 @@ jobs:
           mkdir -p _deps/harmonics
           cd _deps/harmonics
           curl -L --retry 3 --retry-delay 2 -o harmonics.tar.xz "${HARMONICS_URL}"
-
-          # Archive has symlinks; MSYS2 tar may complain. We only need *.tcd.
           tar -xf harmonics.tar.xz || true
-
           TCD_FILE="$(find . -type f -name '*.tcd' | head -n1)"
           if [ -z "${TCD_FILE}" ]; then
             echo "ERROR: No .tcd found after extracting harmonics archive"
             find . -maxdepth 4 -type f | head -n 200 || true
             exit 1
           fi
-
           echo "HARM_TCD=$PWD/${TCD_FILE#./}" >> "$GITHUB_ENV"
           echo "Using HARM_TCD=$PWD/${TCD_FILE#./}"
 
@@ -314,13 +308,12 @@ jobs:
           fi
 
           TIDE_EXE_WIN="$(cygpath -w "$TIDE_EXE")"
-
           printf 'TIDE_EXE=%s\n' "$TIDE_EXE" >> "$GITHUB_ENV"
           printf 'TIDE_EXE_WIN=%s\n' "$TIDE_EXE_WIN" >> "$GITHUB_ENV"
           echo "Using TIDE_EXE=$TIDE_EXE"
           echo "Using TIDE_EXE_WIN=$TIDE_EXE_WIN"
 
-      - name: Smoke test (Windows, real data + log output + predictions)
+      - name: Smoke test (Windows)
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -369,12 +362,10 @@ jobs:
           cp -f build/xtide-nearest.exe dist/xtide-nearest.exe
           cp -f "${{ env.TIDE_EXE }}" dist/tide.exe
 
-          # MinGW runtime DLLs (critical for portability)
           cp -f /mingw64/bin/libstdc++-6.dll dist/
           cp -f /mingw64/bin/libgcc_s_seh-1.dll dist/
           cp -f /mingw64/bin/libwinpthread-1.dll dist/ || true
 
-          # If libtcd was built/installed as a shared DLL, include it too
           if [ -d "${{ env.TCD_PREFIX }}/bin" ]; then
             cp -f "${{ env.TCD_PREFIX }}/bin/"*.dll dist/ || true
           fi
@@ -407,6 +398,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux, windows-x64]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -431,13 +424,23 @@ jobs:
           apt-ftparchive release . > Release
           popd >/dev/null
 
-      - name: Publish release assets (tag v*)
+      - name: Publish versioned release (tag v*)
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ github.token }}
           files: |
             release-assets/linux-amd64/*.tar.gz
             release-assets/linux-arm64/*.tar.gz
-            release-assets/linux-amd64/*.deb
-            release-assets/linux-arm64/*.deb
             release-assets/windows-x64/*.zip
+            apt-repo/*
+
+      - name: Publish/update stable APT release (tag "apt")
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ github.token }}
+          tag_name: apt
+          name: APT repository (stable)
+          target_commitish: ${{ github.sha }}
+          overwrite_files: true
+          files: |
             apt-repo/*
