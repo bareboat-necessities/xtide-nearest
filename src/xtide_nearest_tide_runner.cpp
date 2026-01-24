@@ -337,3 +337,4 @@ TideRunResult RunTideCapture(const TideRunRequest& req) {
 
   return r;
 }
+} // namespace xtide_nearest
