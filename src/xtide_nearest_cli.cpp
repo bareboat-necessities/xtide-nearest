@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
   app.require_subcommand(1);
 
   bool json = false;
-  app.add_flag("--json", json, "Emit machine-readable JSON (help output is unchanged)");
+  app.add_flag("--json", json, "Emit machine-readable JSON");
 
   double lat = 0.0, lon = 0.0;
 
