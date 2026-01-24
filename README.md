@@ -161,3 +161,21 @@ Sample tdc.conf:
 ```
 
 
+## Debian packages install via apt
+
+Add the repo.
+
+Create /etc/apt/sources.list.d/xtide-nearest.list:
+
+```bash
+sudo tee /etc/apt/sources.list.d/xtide-nearest.list >/dev/null <<'EOF'
+deb [trusted=yes] https://github.com/bareboat-necessities/xtide-nearest/releases/download/apt/ ./
+EOF
+```
+
+Update + install
+
+```bash
+sudo apt-get update
+sudo apt-get install xtide-nearest
+```
