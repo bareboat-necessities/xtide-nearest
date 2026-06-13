@@ -72,3 +72,7 @@ target_link_libraries(xtide-nearest
 
 # Optional: if you ever rename the target but want the binary name:
 # set_target_properties(xtide-nearest PROPERTIES OUTPUT_NAME "xtide-nearest")
+
+install(TARGETS xtide-nearest
+  RUNTIME DESTINATION bin
+)
