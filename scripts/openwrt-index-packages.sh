@@ -13,6 +13,17 @@ if [[ "${MODE}" != "flat" ]]; then
   exit 1
 fi
 
+extract_control() {
+  local ipk="$1"
+  local tmpdir="$2"
+
+  if ar t "${ipk}" >/dev/null 2>&1; then
+    ar p "${ipk}" control.tar.gz | tar -xz -C "${tmpdir}" ./control
+  else
+    tar -xOf "${ipk}" ./control.tar.gz 2>/dev/null | tar -xz -C "${tmpdir}" ./control
+  fi
+}
+
 find "${INPUT_DIR}" -type f -name '*.ipk' -print0 | while IFS= read -r -d '' ipk; do
   cp -v "${ipk}" "${OUTPUT_DIR}/"
 done
@@ -22,7 +33,7 @@ packages_file="${OUTPUT_DIR}/Packages"
 for ipk in "${OUTPUT_DIR}"/*.ipk; do
   [[ -e "${ipk}" ]] || continue
   tmpdir="$(mktemp -d)"
-  ar p "${ipk}" control.tar.gz | tar -xz -C "${tmpdir}" ./control
+  extract_control "${ipk}" "${tmpdir}"
   cat "${tmpdir}/control" >> "${packages_file}"
   printf 'Filename: %s\n' "$(basename "${ipk}")" >> "${packages_file}"
   printf 'Size: %s\n' "$(stat -c '%s' "${ipk}")" >> "${packages_file}"
