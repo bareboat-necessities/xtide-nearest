@@ -21,7 +21,7 @@ SDK_LISTING="${WORK_DIR}/sdk-listing.html"
 
 echo "Downloading OpenWrt SDK listing from ${SDK_BASE_URL}/"
 curl -fsSL --retry 3 --retry-delay 2 "${SDK_BASE_URL}/" -o "${SDK_LISTING}"
-SDK_ARCHIVE="$(sed -n 's/.*href="\([^"]*openwrt-sdk-[^"]*linux-x86_64\.tar\.zst\)".*/\1/p' "${SDK_LISTING}" | head -n1)"
+SDK_ARCHIVE="$(sed -n 's/.*href="\([^"]*openwrt-sdk-[^"]*[Ll]inux-x86_64\.tar\.zst\)".*/\1/p' "${SDK_LISTING}" | head -n1)"
 if [[ -z "${SDK_ARCHIVE}" ]]; then
   echo "ERROR: Could not find an OpenWrt SDK archive for ${OPENWRT_VERSION} ${OPENWRT_TARGET}" >&2
   exit 1
