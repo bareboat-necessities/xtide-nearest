@@ -14,17 +14,23 @@ endif()
 find_path(TCD_INCLUDE_DIR
   NAMES tcd.h
   HINTS
+    ${TCD_ROOT}
+    $ENV{TCD_ROOT}
     ${PC_TCD_INCLUDEDIR}
     ${PC_TCD_INCLUDE_DIRS}
   PATH_SUFFIXES include
+  NO_CMAKE_FIND_ROOT_PATH
 )
 
 find_library(TCD_LIBRARY
   NAMES tcd libtcd
   HINTS
+    ${TCD_ROOT}
+    $ENV{TCD_ROOT}
     ${PC_TCD_LIBDIR}
     ${PC_TCD_LIBRARY_DIRS}
-  PATH_SUFFIXES lib
+  PATH_SUFFIXES lib lib64
+  NO_CMAKE_FIND_ROOT_PATH
 )
 
 include(FindPackageHandleStandardArgs)

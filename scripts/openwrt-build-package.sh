@@ -65,8 +65,7 @@ LIBTCD_PREFIX:=$(PKG_BUILD_DIR)/libtcd-prefix
 CMAKE_OPTIONS += \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_PREFIX_PATH=$(LIBTCD_PREFIX) \
-	-DTCD_INCLUDE_DIR:PATH=$(LIBTCD_PREFIX)/include \
-	-DTCD_LIBRARY:FILEPATH=$(LIBTCD_PREFIX)/lib/libtcd.so
+	-DTCD_ROOT:PATH=$(LIBTCD_PREFIX)
 
 TARGET_LDFLAGS += -Wl,-rpath,/usr/lib/xtide-nearest/lib
 
@@ -104,6 +103,8 @@ define Build/Compile/libtcd
 		$(MAKE); \
 		$(MAKE) install; \
 	)
+	test -f $(LIBTCD_PREFIX)/include/tcd.h
+	find $(LIBTCD_PREFIX) -name 'libtcd.so*' -o -name 'libtcd.a'
 endef
 
 define Build/Configure
@@ -118,7 +119,7 @@ endef
 define Package/xtide-nearest/install
 	$(INSTALL_DIR) $(1)/usr/lib/xtide-nearest/lib $(1)/usr/bin $(1)/usr/share/doc/xtide-nearest
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/xtide-nearest $(1)/usr/lib/xtide-nearest/xtide-nearest
-	$(CP) $(LIBTCD_PREFIX)/lib/libtcd.so* $(1)/usr/lib/xtide-nearest/lib/
+	$(CP) $(LIBTCD_PREFIX)/lib*/libtcd.so* $(1)/usr/lib/xtide-nearest/lib/
 	$(INSTALL_BIN) ./files/xtide-nearest.wrapper $(1)/usr/bin/xtide-nearest
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/README.md $(1)/usr/share/doc/xtide-nearest/README.md
 endef
