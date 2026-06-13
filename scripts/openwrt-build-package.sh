@@ -64,7 +64,9 @@ LIBTCD_PREFIX:=$(PKG_BUILD_DIR)/libtcd-prefix
 
 CMAKE_OPTIONS += \
 	-DCMAKE_BUILD_TYPE=Release \
-	-DCMAKE_PREFIX_PATH=$(LIBTCD_PREFIX)
+	-DCMAKE_PREFIX_PATH=$(LIBTCD_PREFIX) \
+	-DTCD_INCLUDE_DIR:PATH=$(LIBTCD_PREFIX)/include \
+	-DTCD_LIBRARY:FILEPATH=$(LIBTCD_PREFIX)/lib/libtcd.so
 
 TARGET_LDFLAGS += -Wl,-rpath,/usr/lib/xtide-nearest/lib
 
@@ -104,8 +106,12 @@ define Build/Compile/libtcd
 	)
 endef
 
-define Build/Compile
+define Build/Configure
 	$(call Build/Compile/libtcd)
+	$(call Build/Configure/Default)
+endef
+
+define Build/Compile
 	$(call Build/Compile/Default)
 endef
 
