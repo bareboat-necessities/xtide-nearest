@@ -104,8 +104,12 @@ define Build/Compile/libtcd
 	)
 endef
 
-define Build/Compile
+define Build/Configure
 	$(call Build/Compile/libtcd)
+	$(call Build/Configure/Default)
+endef
+
+define Build/Compile
 	$(call Build/Compile/Default)
 endef
 
