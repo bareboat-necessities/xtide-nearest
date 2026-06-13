@@ -476,8 +476,14 @@ jobs:
           rm -rf apt-repo openwrt-repo
           mkdir -p apt-repo
 
-          cp -v release-assets/linux-amd64/*.deb apt-repo/
-          cp -v release-assets/linux-arm64/*.deb apt-repo/
+          mapfile -t debs < <(find release-assets -type f -path '*/linux-*/*.deb' | sort)
+          if [ "${#debs[@]}" -eq 0 ]; then
+            echo "ERROR: no Debian packages found in downloaded Linux artifacts"
+            find release-assets -maxdepth 3 -type f | sort
+            exit 1
+          fi
+          printf 'Copying Debian packages into apt-repo:\n'
+          cp -v "${debs[@]}" apt-repo/
 
           pushd apt-repo >/dev/null
           dpkg-scanpackages --multiversion . /dev/null > Packages
